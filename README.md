@@ -1,149 +1,205 @@
 # SeqAdvGAN: 基于序列生成对抗网络的塔防AI注意力机制对抗研究
 
-## 项目简介
+## ✨ 项目简介
 
-本项目深入研究针对Transformer架构的塔防游戏AI决策模型（Attentive-Trigger Network, ATN）的对抗性攻击与防御方法。我们利用序列生成对抗网络（SeqAdvGAN）训练一个生成器CNN，该网络能够接收塔防游戏画面的五维图片序列输入 (Batch Size, Sequence Length, Width, Height, Channels)，并生成微小的、人眼难以察觉的同等形状扰动。将扰动添加到原始图片序列上形成对抗样本，旨在误导ATN模型做出错误的决策，并特别关注攻击如何影响ATN模型显式输出的序列注意力机制。项目还将研究并实现对抗性训练等防御策略，提升ATN模型对该攻击的鲁棒性。
- 
-本项目的研究内容属于"图对抗研究"范畴，专注于对处理序列图像数据和包含注意力机制的复杂决策AI进行对抗性分析。
+本项目 **SeqAdvGAN** 专注于利用 **序列生成对抗网络 (SeqAdvGAN)** 对基于 **Transformer 架构** 的塔防游戏 **AI 决策模型 (Attentive-Trigger Network, ATN)** 的 **注意力机制** 进行 **对抗性攻击** 研究。我们训练一个 **生成器 CNN** 来生成针对五维图片序列输入的微小扰动，旨在误导 ATN 的决策，并深入分析和攻击其显式输出的序列注意力权重。
 
-**关键词:** 对抗攻击, 对抗防御, 注意力机制, Transformer, 序列图像, GAN, AdvGAN, 3DCNN, 塔防AI
+与传统图像对抗攻击不同，本项目聚焦于 **序列图像数据** 和具有 **注意力机制** 的复杂 AI 模型。我们不仅尝试改变最终决策，更探索如何 **操纵 ATN 的内部注意力聚焦区域**，这对于理解和攻击基于注意力的模型具有重要意义。
 
-## 项目特性 (Features)
+**关键词:** 对抗攻击, 对抗防御, 注意力机制, Transformer, 序列图像, GAN, AdvGAN, 3DCNN, 塔防AI, 注意力操纵
 
-* **序列对抗样本生成:** 实现基于3D卷积和3D Bottleneck的序列生成器CNN，生成针对五维图片序列的对抗扰动。
-* **基于GAN的训练框架:** 采用类似AdvGAN的生成对抗网络框架训练生成器，结合判别器确保扰动的隐蔽性。
-* **复合损失函数:** 设计并实现包含基于ATN序列注意力机制的损失、基于ATN决策输出的损失和L-infinity范数扰动约束的复合损失函数。
-* **对抗性训练防御:** 研究并实现基于PGD等方法的对抗性训练，提升ATN模型鲁棒性。
-* **可视化分析:** 开发工具可视化原始序列、对抗样本、扰动以及ATN在序列上的注意力权重分布。
-* **在特定塔防游戏AI上验证:** 在实际的ATN模型上进行攻击和防御实验，使用游戏任务特定指标（如"有效操作"次数）评估效果。
+## 🚀 项目特性 (Features)
 
-## 项目结构 (Project Structure)
+- ✨ **精细化序列对抗扰动生成:** 基于 **3D 卷积** 和 **3D Bottleneck** 构建生成器 CNN，针对五维 (Batch, Channels, Sequence, Height, Width) 图片序列生成高质量、隐蔽的对抗扰动。
+- 🛡️ **灵活的 GAN 训练框架:** 采用类似 AdvGAN 的 GAN 框架训练，支持 **多种 GAN 损失类型 (BCE, LSGAN)**，并通过 **可插拔的判别器模块 (CNN Discriminator, PatchGAN Discriminator)** 增强框架灵活性，便于探索不同判别器结构对生成器训练的影响。
+- 🎯 **创新的注意力感知攻击损失:** 设计并实现多种攻击损失函数，直接针对 ATN 的输出：
+  - **决策损失:** 支持 **MSE** 和 **L1** 距离，以及 **KL/JS 散度** (概念框架)，旨在最大化对抗样本与原始样本在 ATN 最终决策图上的差异，支持 **区域性攻击**。
+  - **注意力损失:** 支持 **MSE, L1, L2/L-inf 差异** 和 **余弦相似度** 等度量。特别引入 **Top-K 注意力损失**，直接攻击原始样本中 Top-K 重要的注意力连接，强制 ATN 将注意力转移到不重要的区域，或降低关键区域的注意力权重。
+- ⚖️ **全面的正则化损失:** 集成 **L2 范数惩罚** 和 **Total Variation (TV) Loss**，约束扰动的大小和空间平滑性，提高对抗样本的隐蔽性。
+- 📊 **详细的评估体系:** 实现多种攻击成功标准 (**MSE 差异阈值, 平均值变化, Top-K 值下降, Top-K 位置变化**)，以及 **感知评估指标 (PSNR, SSIM, LPIPS 框架)**，从多个角度衡量攻击效果和扰动质量。
+- 📈 **丰富的可视化工具:** 提供可视化原始序列、对抗样本、扰动、ATN 决策图（含差异可视化）和 **ATN 注意力热力图（原始 vs. 对抗 vs. 差异）** 的功能，帮助直观理解攻击效果。
+- 📦 **模块化设计:** 代码结构清晰，各模块（模型、损失、工具、脚本）职责分明，易于扩展和修改。
+
+## 🏗️ 项目结构 (Project Structure)
 
 ```
-.
-├── data/                             # 存放原始图片序列数据和处理后的数据集文件
-├── models/                           # 模型定义和权重存放目录
-│   ├── generator_cnn.py              # 序列生成器CNN的代码
-│   ├── discriminator_cnn.py          # 判别器CNN的代码
-│   ├── bottleneck3d.py             # 3D Bottleneck模块代码 (从朋友处获取)
-│   └── atn_model/                    # ATN模型相关文件 (加载代码, 权重等)
-├── losses/                           # 损失函数定义文件
-│   ├── gan_losses.py                 # GAN相关损失函数 (例如, 二元交叉熵用于真假判断)
-│   ├── attack_losses.py              # 攻击相关损失函数 (注意力损失, 决策损失)
-│   └── regularization_losses.py      # 扰动约束损失 (L-infinity等)
-├── utils/                            # 辅助函数, 如数据处理、可视化、评估等
-│   ├── data_utils.py                 # 数据加载和预处理 (处理5D张量)
-│   ├── vis_utils.py                  # 可视化工具 (可视化序列、扰动、注意力)
-│   └── eval_utils.py                 # 评估指标计算 (游戏指标、"有效操作"、注意力差异)
+. 项目根目录
+├── data/                             # 数据集（模拟数据或真实数据）存放及加载脚本
+├── models/                           # 模型定义
+│   ├── generator_cnn.py              # 序列生成器 CNN
+│   ├── discriminator_cnn.py          # CNN 判别器
+│   ├── discriminator_patchgan.py     # PatchGAN 判别器
+│   ├── bottleneck3d.py               # 3D Bottleneck 模块
+│   └── atn_model/                    # 存放 ATN 模型文件 (需自行提供)
+├── losses/                           # 损失函数定义
+│   ├── gan_losses.py                 # GAN 对抗损失
+│   ├── attack_losses.py              # 攻击损失 (决策, 注意力)
+│   └── regularization_losses.py      # 正则化损失 (L-inf, L2, TV)
+├── utils/                            # 辅助工具
+│   ├── atn_utils.py                  # ATN 模型加载和输出获取
+│   ├── data_utils.py                 # 数据加载和预处理 (包含模拟和真实数据加载框架)
+│   ├── vis_utils.py                  # 可视化工具
+│   └── eval_utils.py                 # 评估指标计算
 ├── scripts/                          # 运行脚本
-│   ├── train_generator.py            # 训练序列生成器和判别器的脚本
-│   ├── evaluate_attack.py            # 评估攻击效果的脚本
-│   └── train_defense.py              # 对抗训练防御的脚本
-├── README.md                         # 项目说明文件
+│   ├── train_generator.py            # 训练生成器和判别器主脚本
+│   ├── evaluate_attack.py            # 独立评估攻击效果脚本
+│   ├── train_defense.py              # [TODO] 对抗训练防御脚本
+├── README.md                         # 项目说明文件 (当前文件)
 ├── requirements.txt                  # 项目依赖库列表
 └── ...                               # 其他项目文件
 ```
 
-## 环境配置 (Environment Setup)
+## 🛠️ 环境配置 (Environment Setup)
 
-本项目建议在支持GPU加速的Linux环境（推荐WSL2 + CUDA）下运行。以下是详细配置步骤，针对CUDA版本12.6：
+本项目建议在支持 GPU 加速的 Linux 环境（推荐 WSL2 + CUDA）下运行。请按照以下步骤配置环境。
 
-1.  **安装 Windows Subsystem for Linux (WSL2):**
-    确保你的Windows版本支持WSL2。打开PowerShell或CMD并运行：
-    ```bash
-    wsl --install
-    ```
-    如果已经安装，请确保是WSL2版本：
-    ```bash
-    wsl --set-version <你的Linux发行版名称> 2
-    ```
-    选择并安装一个Linux发行版（如Ubuntu）。
+1.  **安装 WSL2 和 NVIDIA 显卡驱动/WSL2 CUDA Toolkit:**
+    参考 [NVIDIA 官方文档](https://developer.nvidia.com/cuda-downloads) 为您的 WSL2 环境安装与您 GPU 和驱动兼容的 CUDA Toolkit。
 
-2.  **安装 NVIDIA 显卡驱动和 WSL2 CUDA Toolkit:**
-    确保你的Windows主机安装了与WSL2兼容的最新NVIDIA驱动。
-    在WSL2中安装与PyTorch版本和你的驱动兼容的CUDA Toolkit。针对CUDA 12.6，请参考NVIDIA官方文档中的"WSL2"部分获取详细安装步骤和命令：
-    [https://developer.nvidia.com/cuda-downloads]
-    **务必选择适用于WSL-Ubuntu的CUDA 12.6版本。**
+2.  **安装 Miniconda 或 Anaconda:**
+    访问 [Miniconda 官网](https://www.anaconda.com/docs/getting-started/miniconda/install) 下载并安装适合您系统的 Miniconda。
 
-3.  **安装 Miniconda 或 Anaconda:**
-    推荐使用conda进行Python环境管理，可以避免库冲突。
-    在WSL终端中下载并运行Miniconda安装脚本（推荐，更轻量）：
-    [https://www.anaconda.com/docs/getting-started/miniconda/install]
-    按照提示完成安装。安装完成后关闭并重新打开WSL终端。
-
-4.  **创建并激活 conda 环境:**
-    创建一个新的conda环境用于本项目：
+3.  **创建并激活 conda 环境:**
     ```bash
     conda create -n seqadvgan_env python=3.9 # 示例使用 Python 3.9
     conda activate seqadvgan_env
     ```
 
-5.  **安装 PyTorch 及其他依赖:**
-    在已激活的conda环境中，根据你的CUDA版本（12.6）和操作系统，从PyTorch官方网站获取安装命令。
-    **请访问 PyTorch 官方网站 ([https://pytorch.org/get-started/locally/](https://pytorch.org/get-started/locally/))，选择正确的配置（PyTorch Build, Your OS, Package, Language, CUDA），然后复制生成的命令。**
-    示例命令（请**务必**从官网获取最新和最匹配的命令）：
+4.  **安装 PyTorch 及其他依赖:**
+    在已激活的 `seqadvgan_env` 环境中，**务必**访问 [PyTorch 官方网站](https://pytorch.org/get-started/locally/)，根据您的 CUDA 版本、操作系统等选择正确的配置，复制生成的命令并执行。
+    示例命令 (请以官网为准): `conda install pytorch torchvision torchaudio cudatoolkit=11.3 -c pytorch`
+    安装其他依赖：
     ```bash
-    # 示例：安装 PyTorch 1.13 (兼容 CUDA 12.6)
-    conda install pytorch torchvision torchaudio 
+    pip install matplotlib opencv-python tensorboard piq numpy tqdm
     ```
-    安装其他必要的库：
-    ```bash
-    pip install matplotlib opencv-python tensorboard
-    # 如果需要其他库，例如用于SSIM或LPIPS计算，请另行安装
-    ```
+    *(注: `piq` 用于计算感知指标 LPIPS/SSIM, `tqdm` 用于显示进度条)*
 
-6.  **克隆项目仓库:**
+5.  **克隆项目仓库:**
     ```bash
     git clone https://github.com/mirror-ptr/SeqAdvGAN.git
     cd SeqAdvGAN
     ```
 
-7.  **获取 Bottleneck3d 代码:**
-    将朋友提供的 `Bottleneck3d.py` 文件放到项目代码中合适的位置（例如 `models/bottleneck3d.py`）。
+6.  **获取 Bottleneck3d 代码:**
+    请将朋友提供的 `Bottleneck3d.py` 文件放置到 `models/` 目录下。
 
-8.  **获取 ATN 模型:**
-    将ATN模型文件（权重和/或架构定义）放到项目代码中合适的位置（例如 `models/atn_model/`），并确保你有加载该模型的代码和权限。
+7.  **获取 ATN 模型:**
+    请将您拥有的 ATN 模型文件 (权重 `.pth`, 架构定义等) 放置到 `models/atn_model/` 目录下，并确保 `utils/atn_utils.py` 中的 `load_atn_model` 函数能正确加载您的模型。
 
-## 安装 (Installation)
+8.  **生成 requirements.txt (可选):**
+    ```bash
+    pip freeze > requirements.txt
+    ```
 
-本项目依赖于上述环境配置中安装的库。克隆仓库并完成环境配置后即可直接运行代码。你可以生成 `requirements.txt` 文件以便其他人复现环境：
+## 🏃 使用 (Usage)
 
-```bash
-pip freeze > requirements.txt
+激活您的 conda 环境 (`conda activate seqadvgan_env`) 后，您可以使用以下脚本：
 
-```
+### 🏋️‍ 训练序列生成器和判别器 (`scripts/train_generator.py`)
 
-## 使用 (Usage)
+此脚本用于训练 SeqAdvGAN 的生成器和判别器。您可以通过命令行参数配置训练过程、损失函数类型和权重、模型结构等。
 
-（这部分需要等你实现相应运行脚本后详细填写，说明如何训练、评估、防御等）
-
-### 训练序列生成器和判别器
-
-激活您的 conda 环境，并运行训练脚本：
+主要参数示例：
 
 ```bash
-conda activate seqadvgan_env
-python scripts/train_generator.py --epochs 100 --batch_size 4 --epsilon 0.01 --lr_g 0.0002 --lr_d 0.0002 ... # 根据需要添加更多参数
+python scripts/train_generator.py \
+    --epochs 100 \              # 训练轮数
+    --batch_size 4 \            # 训练批次大小 (根据显存调整，常见 Killed 错误原因)
+    --lr_g 0.0002 \             # 生成器学习率
+    --lr_d 0.0002 \             # 判别器学习率
+    --epsilon 0.03 \            # L-infinity 扰动上限
+    --attack_loss_weight 10.0 \ # 攻击损失权重
+    --reg_loss_weight 1.0 \     # 正则化损失权重 (如 L2)
+    --tv_loss_weight 0.1 \      # Total Variation Loss 权重 (用于平滑扰动)
+    --attention_loss_weight 1.0 \ # 攻击损失中注意力损失的权重
+    --decision_loss_weight 1.0 \  # 攻击损失中决策损失的权重
+    --decision_loss_type mse \    # 决策损失类型 (mse, l1, kl, js)
+    --attention_loss_type topk \  # 注意力损失类型 (mse, l1, kl, js, topk)
+    --topk_k 5 \                # Top-K 注意力损失中 K 的值
+    --discriminator_type patchgan \ # 判别器类型 (cnn, patchgan)
+    --gan_loss_type lsgan \       # GAN Loss 类型 (bce, lsgan)
+    --log_dir runs/my_experiment \ # TensorBoard 日志保存目录
+    --checkpoint_dir checkpoints \ # 模型检查点保存目录
+    --save_interval 10 \        # 每隔多少 epoch 保存检查点
+    --eval_interval 5 \         # 每隔多少 epoch 进行一次评估
+    --num_mock_samples 1000 \   # 使用模拟数据时的样本数量 (未来切换为真实数据参数)
+    --atn_model_path /path/to/your/atn_model.pth \ # ATN 模型文件路径
+    # ... 更多参数请参考脚本内部 argparse 定义
 ```
 
-### 评估攻击效果
+**注意:** 如果遇到 `Killed` 错误，通常是显存或内存不足，请 **显著减小 `--batch_size`**。
 
-使用训练好的生成器权重评估攻击ATN模型的效果：
+
+### 📊 独立评估攻击效果 (`scripts/evaluate_attack.py`)
+
+此脚本用于加载训练好的生成器模型，并在指定数据集上评估攻击效果。
+
+主要参数示例：
 
 ```bash
-conda activate seqadvgan_env
-python scripts/evaluate_attack.py --generator_weights_path path/to/generator.pth --atn_model_path path/to/atn_model ...
+python scripts/evaluate_attack.py \
+    --generator_weights_path checkpoints/checkpoint_epoch_50.pth \ # 训练好的生成器权重路径
+    --atn_model_path /path/to/your/atn_model.pth \ # ATN 模型文件路径
+    --batch_size 8 \             # 评估批次大小
+    --eval_success_criterion topk_position_change \ # 评估时攻击成功标准
+    --eval_success_threshold 0.1 \ # 评估成功阈值 (具体含义取决于 success_criterion)
+    --topk_k 10 \                # 评估时 Top-K 相关的 K 值
+    # 未来添加真实数据加载参数: --data_path /path/to/real_data.npy
+    # ... 更多参数请参考脚本内部 argparse 定义
 ```
 
-### 进行对抗训练
 
-（等你实现防御部分后填写）
+### 📈 可视化结果 (`scripts/visualize_results.py`)
+
+此脚本用于加载训练好的生成器权重，生成对抗样本，并使用 TensorBoard 可视化原始/对抗样本、扰动、决策图和注意力热力图。
+
+主要参数示例：
 
 ```bash
-conda activate seqadvgan_env
-python scripts/train_defense.py --atn_model_path path/to/original_atn_model --attack_method PGD ... # 根据需要添加更多参数
+python scripts/visualize_results.py \
+    --generator_weights_path checkpoints/checkpoint_epoch_50.pth \ # 训练好的生成器权重路径
+    --atn_model_path /path/to/your/atn_model.pth \ # ATN 模型文件路径
+    --num_vis_samples 8 \        # 可视化样本数量
+    --batch_size 8 \             # 可视化批次大小
+    --sequence_step_to_vis 0 \   # 可视化哪个序列步骤的特征/扰动
+    --num_vis_heads 1 \          # 可视化多少个注意力头
+    # 未来添加真实数据加载参数: --data_path /path/to/real_data.npy
+    # ... 更多参数请参考脚本内部 argparse 定义
 ```
 
-## 维护者 (Maintainers)
+**可视化示例 (Placeholder):**
 
-## 致谢
+*(请在此处插入您生成的 TensorBoard 截图，例如原始/对抗特征、扰动、决策图对比、注意力热力图对比等)*
+
+![Visualization Example 1]()
+![Visualization Example 2]()
+
+## 📊 评估指标 (Evaluation Metrics)
+
+`utils/eval_utils.py` 中实现了用于衡量攻击效果的多种指标：
+
+- **攻击成功率:**
+  - `mse_diff_threshold`: 对抗样本与原始样本决策图的 **MSE 差异** 大于指定阈值即视为攻击成功。
+  - `mean_change_threshold`: 决策图的 **平均值变化** 大于指定阈值（考虑原始决策图是越高越好还是越低越好）。
+  - `topk_value_drop`: 原始决策图 **Top-K 位置的值** 在对抗样本中 **平均下降** 超过指定阈值即视为攻击成功。
+  - `topk_position_change`: 原始决策图的 **Top-K 索引位置集合** 与对抗样本的 **Top-K 索引位置集合** 不同即视为攻击成功。
+- **扰动大小:** **L-infinity 范数** 和 **L2 范数**，衡量扰动的可见度和强度。
+- **感知质量:** **PSNR**, **SSIM** 和 **LPIPS** (框架已搭建，依赖 `piq` 库)，用于衡量对抗样本与原始样本在视觉感知上的差异，确保扰动的隐蔽性。
+
+
+## 💡 未来工作 (Future Work)
+
+- [ ] 实现更高级的区域性攻击策略。
+- [ ] 实现基于优化的攻击方法 (如 PGD) 进行对比实验。
+- [ ] 完善真实数据集的加载和预处理。
+- [ ] 实施和评估不同的对抗性训练防御策略。
+- [ ] 在真实塔防游戏环境中测试攻击和防御效果。
+- [ ] 探索其他针对 Transformer 注意力机制的攻击方法。
+
+## 🤝 贡献 (Contributing)
+
+欢迎对本项目做出贡献！如果您有任何想法、建议或遇到了问题，请提交 issue 或 pull request。
+
+## ❤️ 致谢
+
+感谢所有为本项目提供帮助的朋友和社区。
