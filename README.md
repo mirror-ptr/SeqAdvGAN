@@ -80,13 +80,10 @@
     cd SeqAdvGAN
     ```
 
-6.  **获取 Bottleneck3d 代码:**
-    请将朋友提供的 `Bottleneck3d.py` 文件放置到 `models/` 目录下。
-
-7.  **获取 ATN 模型:**
+6.  **获取 ATN 模型:**
     请将您拥有的 ATN 模型文件 (权重 `.pth`, 架构定义等) 放置到 `models/atn_model/` 目录下，并确保 `utils/atn_utils.py` 中的 `load_atn_model` 函数能正确加载您的模型。
 
-8.  **生成 requirements.txt (可选):**
+7.  **生成 requirements.txt (可选):**
     ```bash
     pip freeze > requirements.txt
     ```
