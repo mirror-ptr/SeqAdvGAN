@@ -24,7 +24,7 @@ model:
     type: "patchgan"
     base_channels: 64
   atn:
-    model_path: "models/feature_heads/iris_feature_13_ce_4bn_20f_best.pth" # ATN 特征头模型路径
+    model_path: "models/feature_heads/axis_transformers_13_ce_4bn_20f_best.pth" # ATN 特征头模型路径
     # ATN 期望的输入尺寸，需要与 ATN 模型结构一致
     # 注意：如果 ATN 处理原始图片，这里的 in_channels 应该是 3
     atn_in_channels: 3 # ATN 期望的输入通道
@@ -36,7 +36,7 @@ model:
 # 训练配置
 training:
   train_stage: 1 # 新增参数：当前训练阶段，1 代表初步特征攻击
-  batch_size: 4
+  batch_size: 20
   num_epochs: 50 # 阶段一的 epoch 数量
   lr_g: 0.0002
   lr_d: 0.0002
@@ -46,6 +46,7 @@ training:
   device: "cuda"
   generator_weights_path: null # 如果从预训练模型开始，指定路径
   discriminator_weights_path: null # 如果从预训练模型开始，指定路径
+  resume_checkpoint: null # 新增：继续训练的检查点路径
   eval_interval: 5 # 每 5 个 epoch 评估一次
   eval_success_threshold: 0.1 # 评估成功阈值
   eval_success_criterion: 'mse_diff_threshold' # 评估成功标准
@@ -79,7 +80,7 @@ logging:
   log_dir: "runs/stage1_train" # 阶段一的日志目录
   checkpoint_dir: "checkpoints/stage1" # 阶段一的检查点目录
   log_interval: 10 # 每隔多少步打印一次日志
-  vis_interval: 50 # 每隔多少步可视化一次结果
+  vis_interval: 10 # 每隔多少步可视化一次结果
   num_vis_samples: 4 # 可视化样本数量
   sequence_step_to_vis: 0 # 可视化哪个序列步骤的特征/扰动
   num_vis_heads: 1 # 可视化多少个注意力头

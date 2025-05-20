@@ -46,7 +46,7 @@ class GANLosses:
             loss_fake = self.adversarial_loss(D_fake_output, fake_labels)
 
             total_loss_D = loss_real + loss_fake
-            return total_loss_D
+            return total_loss_D, loss_real, loss_fake
 
         elif self.gan_loss_type == 'lsgan':
             # LSGAN 损失：mean((D_real - 1)^2) + mean((D_fake - 0)^2)
@@ -58,7 +58,7 @@ class GANLosses:
             loss_fake = self.adversarial_loss(D_fake_output, torch.zeros_like(D_fake_output, device=self.device)) # (D_fake - 0)^2
 
             total_loss_D = loss_real + loss_fake
-            return total_loss_D
+            return total_loss_D, loss_real, loss_fake
 
         else:
             raise ValueError(f"Unsupported GAN loss type: {self.gan_loss_type}. Cannot calculate discriminator loss.")
