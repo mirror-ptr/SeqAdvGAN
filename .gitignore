@@ -260,11 +260,12 @@ saved_models/
 
 # Log files
 logs/
-runs/ # TensorBoard logs
+runs/
 
 # Datasets - Often too large to commit
 data/
 dataset/
+resource/
 
 # Results of experiments
 results/
@@ -273,6 +274,3 @@ outputs/
 # Temporary files and folders
 temp/
 tmp/
-
-.runs/
-.checkpoints/
