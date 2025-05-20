@@ -1,0 +1,92 @@
+# configs/stage1_config.yaml
+
+# 数据配置
+data:
+  video_path: "data/videos/1392e8264d9904bfffe142421b784cbd.mp4"
+  level_json_path: "resources/level/hard_15-01-obt-hard-level_hard_15-01.json"
+  sequence_length: 5 # 根据视频数据调整
+  channels: 3 # 原始图片通道
+  height: 256 # 原始图片高度
+  width: 256 # 原始图片宽度
+  num_workers: 4
+  use_mock_data: False # 是否使用模拟数据
+  mock_num_samples: 100 # 如果使用模拟数据，模拟的样本数量
+
+# 模型配置
+model:
+  generator:
+    in_channels: 128
+    out_channels: 128
+    epsilon: 0.03
+    num_bottlenecks: 4
+    base_channels: 32
+  discriminator:
+    type: "patchgan"
+    base_channels: 64
+  atn:
+    model_path: "models/feature_heads/iris_feature_13_ce_4bn_20f_best.pth" # ATN 特征头模型路径
+    # ATN 期望的输入尺寸，需要与 ATN 模型结构一致
+    # 注意：如果 ATN 处理原始图片，这里的 in_channels 应该是 3
+    atn_in_channels: 3 # ATN 期望的输入通道
+    atn_sequence_length: 5 # ATN 期望的输入序列长度
+    atn_height: 256 # ATN 期望的输入高度
+    atn_width: 256 # ATN 期望的输入宽度
+    atn_num_heads: 4 # ATN 注意力头数量
+
+# 训练配置
+training:
+  train_stage: 1 # 新增参数：当前训练阶段，1 代表初步特征攻击
+  batch_size: 4
+  num_epochs: 50 # 阶段一的 epoch 数量
+  lr_g: 0.0002
+  lr_d: 0.0002
+  b1: 0.5
+  b2: 0.999
+  seed: 42
+  device: "cuda"
+  generator_weights_path: null # 如果从预训练模型开始，指定路径
+  discriminator_weights_path: null # 如果从预训练模型开始，指定路径
+  eval_interval: 5 # 每 5 个 epoch 评估一次
+  eval_success_threshold: 0.1 # 评估成功阈值
+  eval_success_criterion: 'mse_diff_threshold' # 评估成功标准
+
+# 损失配置
+losses:
+  gan_type: "lsgan"
+  # 在阶段一，attention_loss_weight 和 decision_loss_weight 可以设置为 0，
+  # 或者将 decision_loss_type 用于特征层攻击， attention_loss_type 暂时不用
+  decision_loss_type: "mse" # 用于特征层攻击时也是最大化 MSE
+  attention_loss_type: "none" # 阶段一不使用注意力损失，设置为 'none'
+  decision_loss_weight: 1.0 # 阶段一用于特征层攻击
+  attention_loss_weight: 0.0 # 阶段一禁用注意力损失
+  topk_k: 10 # 用于 Top-K 注意力损失 / 评估标准
+
+# 正则化配置
+regularization:
+  lambda_l_inf: 1.0 # Note: epsilon already enforces L-inf
+  lambda_l2: 0.001
+  lambda_tv: 0.0001
+  lambda_l2_penalty: 0.001
+
+# 掩码配置 (如果你的 ATN 有区域掩码)
+mask:
+  use_region_mask: False
+  # decision_mask_path: "resources/masks/decision_mask.png"
+  # attention_mask_path: "resources/masks/attention_mask.npy"
+
+# 日志配置
+logging:
+  log_dir: "runs/stage1_train" # 阶段一的日志目录
+  checkpoint_dir: "checkpoints/stage1" # 阶段一的检查点目录
+  log_interval: 10 # 每隔多少步打印一次日志
+  vis_interval: 50 # 每隔多少步可视化一次结果
+  num_vis_samples: 4 # 可视化样本数量
+  sequence_step_to_vis: 0 # 可视化哪个序列步骤的特征/扰动
+  num_vis_heads: 1 # 可视化多少个注意力头
+
+# 评估配置 (在 stage1 也会进行评估，但决策和注意力成功率可能为 0 或不准确)
+evaluation:
+  eval_interval: 5
+  success_threshold: 0.1
+  success_criterion: "mse_diff_threshold" # 评估成功标准，在阶段一主要看其他指标
+  num_eval_samples: 100 # 用于评估的样本数量 

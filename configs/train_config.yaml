@@ -1,0 +1,79 @@
+# configs/train_config.yaml
+
+# 数据配置
+data:
+  video_path: "data/videos/1392e8264d9904bfffe142421b784cbd.mp4"
+  level_json_path: "resources/level/hard_15-01-obt-hard-level_hard_15-01.json"
+  sequence_length: 5 # 根据视频数据调整
+  channels: 3 # 原始图片通道
+  height: 256 # 原始图片高度
+  width: 256 # 原始图片宽度
+  num_workers: 4
+
+# 模型配置
+model:
+  generator:
+    in_channels: 3 # 生成器现在处理原始图片通道
+    out_channels: 3
+    epsilon: 0.03
+    num_bottlenecks: 4
+    base_channels: 32
+  discriminator:
+    type: "patchgan"
+    base_channels: 64
+  atn:
+    model_path: "models/feature_heads/iris_feature_13_ce_4bn_20f_best.pth"
+    # ATN 期望的输入尺寸，需要与 ATN 模型结构一致
+    # 注意：如果 ATN 处理原始图片，这里的 in_channels 应该是 3
+    atn_in_channels: 3 # ATN 期望的输入通道
+    atn_sequence_length: 5 # ATN 期望的输入序列长度
+    atn_height: 256 # ATN 期望的输入高度
+    atn_width: 256 # ATN 期望的输入宽度
+    atn_num_heads: 4
+
+# 训练配置
+training:
+  batch_size: 4
+  num_epochs: 100
+  lr_g: 0.0002
+  lr_d: 0.0002
+  b1: 0.5
+  b2: 0.999
+  seed: 42
+  device: "cuda"
+
+# 损失配置
+losses:
+  gan_type: "lsgan"
+  attack_loss_type: "mse" # 可以是 mse, l1, kl, js (for attention), topk (for attention)
+  decision_loss_type: "mse" # 可以是 mse, l1 (for decision map)
+  decision_loss_weight: 1.0
+  attention_loss_weight: 1.0
+  topk_k: 10 # 用于 Top-K 注意力损失和评估标准
+
+# 正则化配置
+regularization:
+  lambda_l_inf: 1.0
+  lambda_l2: 0.0 # 可以调整L2范数惩罚权重
+  lambda_tv: 0.0001 # 可以调整TV损失权重
+  lambda_l2_penalty: 0.001 # L2 penalty on generator parameters
+
+# 掩码配置
+mask:
+  use_region_mask: False
+  # decision_mask_path: "resources/masks/decision_mask.png" # 如果有真实的掩码文件
+  # attention_mask_path: "resources/masks/attention_mask.npy"
+
+# 日志和保存配置
+logging:
+  log_dir: "runs/seqadvgan_real_data"
+  checkpoint_dir: "checkpoints/seqadvgan_real_data"
+  log_interval: 50
+  vis_interval: 200
+  save_interval: 10
+
+# 评估配置
+evaluation:
+  eval_interval: 5
+  success_threshold: 0.1
+  success_criterion: "mse_diff_threshold" # mse_diff_threshold, mean_change_threshold, topk_value_drop, topk_position_change

@@ -1,225 +1,139 @@
 import torch
-from torch.utils.data import Dataset, DataLoader
-import numpy as np
+from torch.utils.data import Dataset
+import cv2
 import os
-import random
+import json
+import numpy as np
+import torchvision.transforms as transforms # Import transforms
 
-# TODO: 根据实际数据格式实现真实数据加载
+from IrisArknights import calculate_transform_matrix, transform_image, Level
 
-# 导入 ATN 工具 (如果需要 ATN 来处理原始数据)
-# from utils.atn_utils import load_atn_model, get_atn_outputs
-
-# --- 模拟数据加载 (保留用于开发和测试) ---
-
-class MockFeatureDataset(Dataset):
-    def __init__(self, num_samples=100, sequence_length=16, channels=128, height=64, width=64):
-        self.num_samples = num_samples
+class GameVideoDataset(Dataset):
+    def __init__(self, video_path, level_json_path, sequence_length, transform=None, target_height=None, target_width=None):
+        self.video_path = video_path
+        self.level_json_path = level_json_path
         self.sequence_length = sequence_length
-        self.channels = channels
-        self.height = height
-        self.width = width
-        # 生成一些随机模拟数据
-        self.mock_data = torch.randn(num_samples, channels, sequence_length, height, width)
+        self.transform = transform # Optional external transform
+        self.target_height = target_height
+        self.target_width = target_width
+
+        # 1. 初始化关卡和变换矩阵
+        # assuming calculate_transform_matrix and Level are available and work correctly
+        self.level, self.transform_matrix, self.inverse_transform_matrix = calculate_transform_matrix(self.level_json_path)
+
+        # 2. 加载视频并获取帧数
+        self.cap = cv2.VideoCapture(self.video_path)
+        if not self.cap.isOpened():
+            raise IOError(f"Cannot open video file: {video_path}")
+        self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        # 创建一个 Resize transform 如果需要
+        self.resize_transform = None
+        if self.target_height is not None and self.target_width is not None:
+             self.resize_transform = transforms.Resize((self.target_height, self.target_width))
+
 
     def __len__(self):
-        # 返回数据集中的样本总数
-        return self.num_samples
+        # 确保有足够的帧来形成一个序列
+        return max(0, self.total_frames - self.sequence_length + 1)
 
     def __getitem__(self, idx):
-        # 根据索引获取单个样本
-        # TODO: 如果真实数据包含掩码，这里也需要返回对应的掩码
-        # 例如: return self.mock_data[idx], self.mock_decision_mask[idx], self.mock_attention_mask[idx]
-        return self.mock_data[idx]
+        # 设置视频帧的起始位置
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        
+        sequence_frames = []
+        for _ in range(self.sequence_length):
+            ret, frame = self.cap.read()
+            if not ret:
+                # 如果读取失败，尝试获取下一序列
+                print(f"Warning: Could not read frame at index {idx + _}. Attempting next sequence.")
+                return self.__getitem__(idx + 1) if idx + 1 < len(self) else None # 尝试获取下一序列
+            
+            # 对当前帧进行透视变换
+            # 调用 transform_image 函数，传入 level 实例, 变换矩阵 M, 和当前帧
+            processed_frame = transform_image(self.level, self.transform_matrix, frame)
+            
+            # 转换为 PyTorch 兼容的格式 (C, H, W) 和数据类型
+            # Convert from BGR (cv2 default) to RGB
+            processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB) 
+            # Convert numpy array to torch tensor
+            processed_frame = torch.from_numpy(processed_frame).permute(2, 0, 1).float() # HWC to CHW, to float
 
-def create_mock_dataloader(batch_size=1, num_samples=100, sequence_length=16, channels=128, height=64, width=64, shuffle=True, num_workers=0):
-    mock_dataset = MockFeatureDataset(num_samples, sequence_length, channels, height, width)
+            # 应用 Resize transform 如果存在
+            if self.resize_transform:
+                 processed_frame = self.resize_transform(processed_frame)
+
+            # 归一化到 [0, 1]
+            processed_frame = processed_frame / 255.0
+
+            # 应用可选的外部 transform
+            if self.transform:
+                processed_frame = self.transform(processed_frame)
+
+            sequence_frames.append(processed_frame)
+
+        # 将序列帧堆叠成一个张量 (T, C, H, W)
+        sequence_tensor = torch.stack(sequence_frames, dim=0)
+        
+        # 你的模型可能期望 (B, C, T, H, W) 格式，这里需要调整
+        # Dataset __getitem__ 应该返回单个样本，所以是 (T, C, H, W)
+        # DataLoader 会堆叠成 (B, T, C, H, W)
+        # 如果你的模型期望 (B, C, T, H, W)，你可能需要在 DataLoader 的 collate_fn 中处理，
+        # 或者在训练循环中 permute 张量。
+        # 这里假设 DataLoader 返回 (B, T, C, H, W) 并需要在训练循环中转换为 (B, C, T, H, W)
+
+        # Add sequence dimension after batching in DataLoader
+        # Return (C, T, H, W) or (T, C, H, W)? Let's return (C, T, H, W)
+        # No, DataLoader expects samples to be stacked. Let's return (T, C, H, W)
+        # Permute in the training loop if (B, C, T, H, W) is needed.
+
+        # Permute to (C, T, H, W) for consistency with model input expectation
+        # The generator input is (B, C, N, W, H) - wait, let's check Generator __init__
+        # Generator expects (B, 128, N, W, H)
+        # So the input to the generator should be (B, Channels, Sequence_Length, Width, Height)
+        # Let's adjust the dataset output to (Channels, Sequence_Length, Height, Width)
+        # Original: (T, C, H, W) -> permute(1, 0, 2, 3) -> (C, T, H, W)
+        # Need (C, N, H, W) where N=T
+        sequence_tensor = sequence_tensor.permute(1, 0, 2, 3) # (C, T, H, W)
+
+        # TODO: If using masks, load/generate masks here and return them
+        # return sequence_tensor, decision_mask, attention_mask
+        return sequence_tensor # Only return features for now
+
+    def __del__(self):
+        # 释放视频捕获对象
+        if hasattr(self, 'cap') and self.cap.isOpened():
+            self.cap.release()
+
+# 占位符：创建模拟数据加载器（保留用于测试）
+def create_mock_dataloader(batch_size, num_samples, sequence_length, channels, height, width, shuffle=True, num_workers=0):
+    """
+    创建一个模拟数据的 DataLoader。
+    """
+    class MockDataset(Dataset):
+        def __init__(self, num_samples, sequence_length, channels, height, width):
+            self.num_samples = num_samples
+            self.sequence_length = sequence_length
+            self.channels = channels
+            self.height = height
+            self.width = width
+
+        def __len__(self):
+            return self.num_samples
+
+        def __getitem__(self, idx):
+            # 模拟数据形状: (C, N, H, W)
+            # 确保数据范围在 [0, 1] 以模拟归一化后的图像或特征
+            mock_data = torch.randn(self.channels, self.sequence_length, self.height, self.width) * 0.1 + 0.5 # centered around 0.5
+            mock_data = torch.clamp(mock_data, 0, 1)
+            
+            # TODO: 如果需要模拟掩码，在这里生成并返回
+            # decision_mask = torch.ones(self.height, self.width)
+            # attention_mask = torch.ones(4, self.sequence_length, self.sequence_length) # Assuming 4 heads
+            # return mock_data, decision_mask, attention_mask
+
+            return mock_data
+
+    mock_dataset = MockDataset(num_samples, sequence_length, channels, height, width)
     dataloader = DataLoader(mock_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
     return dataloader
-
-
-# --- 真实数据加载框架 (TODO: 需要根据实际数据格式和文件结构实现) ---
-
-# 假设真实数据存储为一系列的 .npy 文件，每个文件包含一个样本的特征张量。
-# 假设文件命名规则例如 sample_00001.npy, sample_00002.npy 等。
-# 假设区域掩码也存储为 .npy 文件，且与特征文件对应。
-# 假设数据路径结构如下：
-# /path/to/real_data/
-#   features/
-#     sample_00001.npy
-#     sample_00002.npy
-#     ...
-#   masks/
-#     decision_mask_00001.npy  # 形状 (W, H)
-#     attention_mask_00001.npy # 形状 (head, N, N) 或 (N, N) 如果所有头共用
-#     ...
-
-class ATNFeatureDataset(Dataset):
-    def __init__(self, data_root: str, sequence_length: int, channels: int, height: int, width: int, # 需要知道数据的基本形状信息
-                 use_masks: bool = False, mask_strategy: str = 'none', mask_path: str = None, # 掩码相关参数
-                 subset_indices: list[int] = None): # 可选：加载数据集的子集
-        """
-        用于加载 ATN 真实特征数据和对应掩码的 Dataset。
-
-        Args:
-            data_root (str): 真实数据存放的根目录路径。
-            sequence_length (int): 数据序列长度。
-            channels (int): 数据通道数 (ATN 特征维度)。
-            height (int): 数据空间高度。
-            width (int): 数据空间宽度。
-            use_masks (bool): 是否加载区域掩码。
-            mask_strategy (str): 掩码加载策略 ('none', 'file', 'generate_from_metadata', ...)。
-                                 'file': 从对应文件加载掩码。
-                                 'generate_from_metadata': 根据元数据信息生成掩码 (TODO)。
-            mask_path (str, optional): 如果 mask_strategy is 'file', 指定掩码文件存放的根目录。
-            subset_indices (list[int], optional): 如果只加载部分数据，提供样本索引列表。
-        """
-        self.data_root = data_root
-        self.features_dir = os.path.join(data_root, 'features') # 假设特征文件在 features 子目录下
-        self.masks_dir = mask_path if mask_path else os.path.join(data_root, 'masks') # 假设掩码文件在 masks 子目录下
-        self.sequence_length = sequence_length
-        self.channels = channels
-        self.height = height
-        self.width = width
-        self.use_masks = use_masks
-        self.mask_strategy = mask_strategy
-
-        # 获取所有特征文件的列表
-        # 假设文件按名称排序对应样本索引
-        feature_files = sorted([f for f in os.listdir(self.features_dir) if f.endswith('.npy')])
-        if not feature_files:
-            raise FileNotFoundError(f"No .npy feature files found in {self.features_dir}")
-
-        # 如果指定了子集索引，过滤文件列表
-        if subset_indices is not None:
-            # 假设文件名格式 'sample_XXXXX.npy'，我们可以从文件名解析索引
-            # TODO: 需要根据实际文件名格式调整索引解析逻辑
-            all_indices = [int(f.split('_')[-1].split('.')[0]) for f in feature_files]
-            # 过滤出 subset_indices 中包含的文件
-            self.feature_files = [f for i, f in zip(all_indices, feature_files) if i in subset_indices]
-        else:
-            self.feature_files = feature_files
-
-        if not self.feature_files:
-             raise FileNotFoundError(f"No feature files found for the specified subset indices in {self.features_dir}")
-
-        # TODO: 检查特征文件的形状是否与预期一致 (可选，可以在加载时检查)
-        # TODO: 如果使用 file 策略加载掩码，检查掩码文件是否存在且与特征文件数量对应
-        if self.use_masks and self.mask_strategy == 'file':
-            # 假设掩码文件名与特征文件名对应，例如 features/sample_001.npy -> masks/decision_mask_001.npy, masks/attention_mask_001.npy
-            # TODO: 需要根据实际命名规则查找和匹配掩码文件
-            print(f"Warning: Mask file loading logic is a placeholder. Need to implement actual file matching in {self.__class__.__name__}.__getitem__.")
-            # self.decision_mask_files = [...] # 匹配到的决策掩码文件列表
-            # self.attention_mask_files = [...] # 匹配到的注意力掩码文件列表
-            # assert len(self.decision_mask_files) == len(self.feature_files)
-            # assert len(self.attention_mask_files) == len(self.feature_files)
-
-    def __len__(self):
-        # 返回数据集中的样本总数
-        return len(self.feature_files)
-
-    def __getitem__(self, idx):
-        # 根据索引获取单个样本及其掩码 (如果使用)
-        feature_filename = self.feature_files[idx]
-        feature_filepath = os.path.join(self.features_dir, feature_filename)
-
-        # 加载特征数据
-        # 数据加载需要考虑内存，如果文件很大，可能需要分块读取或使用内存映射
-        # 这里简单使用 np.load
-        try:
-            feature_data = np.load(feature_filepath)
-            # 转换为 PyTorch Tensor
-            # 假设 numpy 数据形状是 (C, N, H, W)，需要转换为 PyTorch 的 (C, N, H, W)
-            # 或者如果 numpy 数据形状是 (N, H, W, C)，需要转换为 (C, N, H, W)
-            # TODO: 确认 numpy 数据的实际通道位置
-            feature_tensor = torch.from_numpy(feature_data).float() # 转换为 float 类型
-            # 检查形状是否符合预期
-            expected_shape = (self.channels, self.sequence_length, self.height, self.width)
-            if feature_tensor.shape != expected_shape:
-                 print(f"Warning: Loaded feature shape {feature_tensor.shape} does not match expected shape {expected_shape} for file {feature_filename}. Attempting reshape or transpose if possible.")
-                 # TODO: 根据实际情况尝试 reshape 或 transpose 来匹配期望形状
-                 # 例如，如果 numpy 是 (N, H, W, C)，需要 transpose(3, 0, 1, 2)
-                 # if feature_tensor.ndim == 4 and feature_tensor.shape[3] == self.channels: # 假设 (N, H, W, C)
-                 #      feature_tensor = feature_tensor.permute(3, 0, 1, 2)
-                 #      if feature_tensor.shape == expected_shape:
-                 #           print("Successfully transposed.")
-                 #      else:
-                 #           print(f"Transpose failed to match shape. Expected {expected_shape}, got {feature_tensor.shape}.")
-                 #           # 返回一个形状不匹配的张量，可能会导致后续错误
-                 # else:
-                 #      print("Cannot automatically reshape/transpose.")
-                 #      # 返回一个形状不匹配的张量
-
-        except Exception as e:
-            print(f"Error loading feature file {feature_filepath}: {e}. Returning zero tensor.")
-            # 如果加载失败，返回一个零张量或跳过样本 (跳过样本需要自定义 collate_fn)
-            feature_tensor = torch.zeros(self.channels, self.sequence_length, self.height, self.width, dtype=torch.float32)
-
-
-        decision_mask = None
-        attention_mask = None
-
-        if self.use_masks:
-            if self.mask_strategy == 'file':
-                # TODO: 根据 feature_filename 查找并加载对应的掩码文件
-                # 例如: mask_filename_prefix = feature_filename.replace('sample_', '').replace('.npy', '')
-                # decision_mask_filepath = os.path.join(self.masks_dir, f'decision_mask_{mask_filename_prefix}.npy')
-                # attention_mask_filepath = os.path.join(self.masks_dir, f'attention_mask_{mask_filename_prefix}.npy')
-                print(f"Placeholder for loading mask files for {feature_filename}.")
-                # 模拟加载掩码：创建全1或全0掩码
-                decision_mask = torch.ones(self.height, self.width, dtype=torch.float32) # (W, H)
-                attention_mask = torch.ones(4, self.sequence_length, self.sequence_length, dtype=torch.float32) # 模拟 (head, N, N)，假设4个注意力头
-                # TODO: 如果需要测试局部攻击，可以在这里创建局部为1的模拟掩码
-
-            elif self.mask_strategy == 'generate_from_metadata':
-                 # TODO: 根据样本相关的元数据信息动态生成掩码
-                 print("Mask generation from metadata is not implemented.")
-                 decision_mask = None
-                 attention_mask = None
-            else:
-                 print(f"Warning: Unsupported mask strategy: {self.mask_strategy}.")
-                 decision_mask = None
-                 attention_mask = None
-
-        # 返回特征张量和掩码 (如果使用)
-        if self.use_masks:
-            return feature_tensor, decision_mask, attention_mask
-        else:
-            return feature_tensor
-
-def create_real_dataloader(data_root: str, batch_size: int, sequence_length: int, channels: int, height: int, width: int,
-                           use_masks: bool = False, mask_strategy: str = 'none', mask_path: str = None,
-                           subset_indices: list[int] = None,
-                           shuffle: bool = True, num_workers: int = 0):
-    """
-    创建真实数据的数据加载器。
-
-    Args:
-        data_root (str): 真实数据存放的根目录路径。
-        batch_size (int): 数据加载批次大小。
-        sequence_length (int): 数据序列长度。
-        channels (int): 数据通道数。
-        height (int): 数据空间高度。
-        width (int): 数据空间宽度。
-        use_masks (bool): 是否加载区域掩码。
-        mask_strategy (str): 掩码加载策略。
-        mask_path (str, optional): 如果 mask_strategy is 'file', 指定掩码文件存放的根目录。
-        subset_indices (list[int], optional): 如果只加载部分数据，提供样本索引列表。
-        shuffle (bool): 是否打乱数据。
-        num_workers (int): 数据加载进程数。
-
-    Returns:
-        DataLoader: 真实数据的数据加载器。
-    """
-    real_dataset = ATNFeatureDataset(
-        data_root=data_root,
-        sequence_length=sequence_length,
-        channels=channels,
-        height=height,
-        width=width,
-        use_masks=use_masks,
-        mask_strategy=mask_strategy,
-        mask_path=mask_path,
-        subset_indices=subset_indices
-    )
-    dataloader = DataLoader(real_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
-    return dataloader 

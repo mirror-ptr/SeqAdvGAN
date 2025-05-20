@@ -70,7 +70,7 @@
     示例命令 (请以官网为准): `conda install pytorch torchvision torchaudio cudatoolkit=11.3 -c pytorch`
     安装其他依赖：
     ```bash
-    pip install matplotlib opencv-python tensorboard piq numpy tqdm
+    pip install matplotlib opencv-python tensorboard piq numpy tqdm pyyaml easydict
     ```
     *(注: `piq` 用于计算感知指标 LPIPS/SSIM, `tqdm` 用于显示进度条)*
 
