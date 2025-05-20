@@ -265,7 +265,7 @@ runs/
 # Datasets - Often too large to commit
 data/
 dataset/
-resource/
+resources/
 
 # Results of experiments
 results/
