@@ -21,7 +21,7 @@ def linf_norm(delta):
     # .view(delta.shape[0], -1) 将 B, C, N, H, W 展平成 B, C*N*H*W
     # .abs() 计算绝对值
     # .max(dim=1)[0] 找到每个样本（在 dim=1 上）的最大值
-    return delta.view(delta.shape[0], -1).abs().max(dim=1)[0]
+    return delta.reshape(delta.shape[0], -1).abs().max(dim=1)[0]
 
 def l2_norm(delta):
     """
@@ -33,7 +33,7 @@ def l2_norm(delta):
         torch.Tensor: 该批次中每个样本的 L2 范数 (形状 B)。
     """
     # 在除了 Batch 之外的所有维度上计算平方和的平方根
-    return (delta.view(delta.shape[0], -1)**2).sum(dim=1).sqrt()
+    return (delta.reshape(delta.shape[0], -1)**2).sum(dim=1).sqrt()
 
 # --- 可能的损失函数 (如果需要明确惩罚范数) ---
 

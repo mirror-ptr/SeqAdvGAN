@@ -3,10 +3,17 @@ import torch.nn as nn
 import torch.nn.functional as F
 import os
 
-# TODO: 这是最关键的一步！
-# 你需要从你的"朋友"那里获取完整的 ATN 模型类定义。
-# 假设这个模型类定义在 models/atn_model.py 中，并且名为 `AttentiveTriggerNetwork`。
-# from models.atn_model import AttentiveTriggerNetwork # 替换为你的实际 ATN 模型类
+
+# 导入你的 IrisXeonNet 类
+# 确保你的 Python 环境可以找到 IrisBabel 模块
+try:
+    from IrisBabel.nn.CNN.IrisXeonNet import IrisXeonNet
+    print("Successfully imported IrisXeonNet from IrisBabel.")
+except ModuleNotFoundError as e:
+    print(f"Error importing IrisXeonNet: {e}")
+    print("Please ensure the IrisBabel module is correctly placed in the project root or in Python path.")
+    IrisXeonNet = None # Set to None if import fails
+
 
 # ⚠️ 临时占位符 ATN 模型类，请务必替换为你的实际模型！
 # 这个类需要能够接收模型输入相关的尺寸参数，并包含一个 feature_extractor 子模块
@@ -122,116 +129,192 @@ class AttentiveTriggerNetwork(nn.Module):
 
 def load_atn_model(model_path, device, in_channels, sequence_length, height, width, num_heads, load_feature_head_only=False):
     """
-    加载 ATN 模型，并将特征头权重加载到模型中。
+    加载 ATN 模型 (假设权重文件对应 IrisXeonNet)。
     model_path: 指向模型权重的路径。
     device: 计算设备。
-    in_channels, sequence_length, height, width, num_heads: 用于初始化完整的 ATN 模型。
-    load_feature_head_only (bool): 如果为 True，只加载特征头权重（假设模型结构支持）。
+    in_channels, sequence_length, height, width, num_heads: 用于初始化模型 (如果 IrisXeonNet 需要这些参数，请调整)。
+    load_feature_head_only (bool): 在 IrisXeonNet 的情况下，此参数可能不适用，因为 IrisXeonNet 似乎本身就是特征提取器。
+                                  保留此参数用于兼容性，但在加载 IrisXeonNet 时其行为可能不同。
     """
-    print(f"Loading ATN model and feature head from {model_path}")
+    print(f"Loading ATN model (assuming IrisXeonNet structure) from {model_path}")
 
-    # 实例化完整的 ATN 模型，传入初始化参数
-    # TODO: 替换为你的真实 AttentiveTriggerNetwork 类
-    # 如果你的 ATN 模型初始化需要不同的参数集，请调整这里
-    atn_model = AttentiveTriggerNetwork(
-        in_channels=in_channels,
-        sequence_length=sequence_length,
-        height=height,
-        width=width,
-        num_heads=num_heads
-    ).to(device)
+    if IrisXeonNet is None:
+        print("IrisXeonNet class not found due to import error. Cannot load ATN model.")
+        return None
+
+    # 实例化 IrisXeonNet 模型
+    # TODO: 检查 IrisXeonNet 的 __init__ 方法需要哪些参数，并根据你的配置 cfg.model.atn 提供。
+    # 根据 IrisBabel/nn/CNN/IrisXeonNet.py 文件内容，__init__ 只需要 num_classes (默认为 1000)。
+    # 如果你的权重文件需要特定的 num_classes 来匹配结构，请在此处指定。
+    # 这里暂且使用默认值，如果加载失败，可能需要调整。
+    try:
+        # 实例化模型。注意：这里假设 IrisXeonNet 的初始化不需要 cfg 中的所有 atn_* 参数
+        # 如果你的 IrisXeonNet 实际需要这些参数，请在这里传递。
+        atn_model = IrisXeonNet().to(device)
+        print("Instantiated IrisXeonNet model.")
+    except Exception as e:
+        print(f"Error instantiating IrisXeonNet: {e}")
+        return None
+
 
     if os.path.exists(model_path):
-        state_dict = torch.load(model_path, map_location=device, weights_only=False)
-
         try:
-            if load_feature_head_only:
-                # 假设特征提取器是 atn_model 的一个子模块，名为 'feature_extractor'
-                # 并且 model_path 直接指向特征头的权重文件
-                # 如果你的特征头权重文件和完整模型的权重文件不同，请调整 config 中的 model_path
-                atn_model.feature_extractor.load_state_dict(state_dict, strict=True)
-                print("Successfully loaded feature head state dict to ATN model's feature_extractor.")
-            else:
-                # 加载完整的模型权重
-                # 如果权重文件的键名与模型的不完全匹配，可能需要调整 strict=False
-                atn_model.load_state_dict(state_dict, strict=True)
-                print("Successfully loaded full ATN model state dict.")
-        except RuntimeError as e:
-            print(f"Warning: Could not load state dict with strict=True. Error: {e}")
-            print("Attempting to load with strict=False...")
-            # 如果键名不匹配，尝试非严格加载，并打印缺失和意外的键
-            if load_feature_head_only:
-                missing_keys, unexpected_keys = atn_model.feature_extractor.load_state_dict(state_dict, strict=False)
-                print("Loaded feature head state dict with strict=False.")
-            else:
-                missing_keys, unexpected_keys = atn_model.load_state_dict(state_dict, strict=False)
-                print("Loaded full ATN model state dict with strict=False.")
+            # 加载权重，使用 weights_only=False 和 strict=False
+            # weights_only=False 解决 _pickle.UnpicklingError (ModuleNotFoundError)
+            # strict=False 解决键名不完全匹配的问题
+            state_dict = torch.load(model_path, map_location=device, weights_only=False)
+            print(f"Loaded state_dict from {model_path} with weights_only=False.")
+
+            # 由于我们假设权重文件直接对应 IrisXeonNet，直接加载到模型
+            # 使用 strict=False 以处理键名不完全匹配的情况
+            missing_keys, unexpected_keys = atn_model.load_state_dict(state_dict, strict=False)
+            print("Attempted to load state dict to IrisXeonNet with strict=False.")
 
             if missing_keys:
-                print(f"Missing keys: {missing_keys}")
+                print(f"Missing keys in loaded state_dict: {missing_keys}")
             if unexpected_keys:
-                print(f"Unexpected keys: {unexpected_keys}")
+                print(f"Unexpected keys in loaded state_dict: {unexpected_keys}")
+
+            # 如果 missing_keys 包含关键层（如 conv 层或 BN 层），加载可能没有成功
+            if missing_keys and any(k.startswith(('conv', 'bn', 'bottleneck')) for k in missing_keys):
+                print("Warning: Significant model keys are missing. State dict might not match IrisXeonNet structure.")
+
+
+        except Exception as e:
+            print(f"Error loading state dict to IrisXeonNet: {e}")
+            print("ATN model might not be loaded correctly.")
+            # 如果加载失败，可以返回 None 或随机初始化的模型
+            return None # Return None if loading fails critically
 
     else:
-        print(f"Warning: ATN model weights not found at {model_path}. Using randomly initialized model.")
+        print(f"Warning: ATN model weights not found at {model_path}. Using randomly initialized IrisXeonNet.")
 
     atn_model.eval()
     return atn_model
 
 def get_atn_outputs(atn_model, x, return_features=False, return_decision=True, return_attention=True):
     """
-    获取 ATN 模型的指定输出。
+    获取 IrisXeonNet 模型的指定输出。
+    由于 IrisXeonNet 当前看起来只返回特征，此函数将只返回 features。
+    未来如果使用完整的 ATN 模型，需要修改此函数。
 
     Args:
-        atn_model: ATN 模型实例。
+        atn_model: ATN 模型实例 (现在是 IrisXeonNet 实例)。
         x (torch.Tensor): 输入张量 (B, C, T, H, W) 或 (B, C, N, W, H) - 根据模型期望调整。
-        return_features (bool): 是否返回特征提取器输出。
-        return_decision (bool): 是否返回决策图。
-        return_attention (bool): 是否返回注意力矩阵。
 
     Returns:
         dict: 包含指定输出的字典。
-              可能包含 'features', 'decision', 'attention'。
+              目前只返回 'features'。
     """
+    if atn_model is None:
+        print("Warning: ATN model is None. Cannot get ATN outputs.")
+        return {}
+
     atn_model.eval()
     with torch.no_grad():
-        # 假设 ATN model 的 forward 方法可以接受参数来控制返回的输出
-        # TODO: 根据你的实际 ATN model.forward 方法签名进行调整
-        outputs = atn_model(x, return_features=return_features, return_decision=return_decision, return_attention=return_attention)
+        # 假设 IrisXeonNet 的 forward 方法接受 (B, C, T, H, W) 或 (B, C, N, W, H)
+        # 根据 IrisXeonNet.py 文件，forward 方法内部会 permute 输入
+        # 它似乎期望输入是 (B, C, H, W) 然后 permute 成 (B, W, C, H, W)??
+        # 不，forward 的第一行是 x = torch.permute(x, (0, 4, 1, 2, 3))
+        # 如果输入是 (B, C, T, H, W)，permute 后变成 (B, W, C, T, H)
+        # 这看起来与 conv3d 的输入形状不符 (conv3d 期望 (B, C_in, D, H_in, W_in))
+        # IrisXeonNet Conv3d kernels are (1, 3, 3), stride (1, 3, 3)
+        # 这意味着 Conv3d 操作主要在 spatial (H, W) 和 channel (C) 维度上进行
+        # 序列维度 T (或 N) 似乎被当作 depth 维度 D
+        # 如果输入 x 是 (B, C, T, H, W)，那么 permute (0, 4, 1, 2, 3) 得到 (B, W, C, T, H)
+        # 再 permute (0, 2, 3, 4, 1) 将其变回 (B, C, T, H, W)，然后 Conv3d 的输入 channel 是 C。
+        # 这与 IrisXeonNet 的 conv1x1_1(3, 16, ...) 不符，它的输入通道是 3。
+        # 看来 IrisXeonNet 期望的输入形状可能不是标准的 (B, C, T, H, W) 格式。
 
-    # 确保返回的是一个字典，并且包含所有请求的输出
-    result = {}
-    if return_features and 'features' in outputs:
-        result['features'] = outputs['features']
-    if return_decision and 'decision' in outputs:
-        result['decision'] = outputs['decision']
-    if return_attention and 'attention' in outputs:
-        result['attention'] = outputs['attention']
+        # ⚠️ 紧急修正：根据 IrisXeonNet.py 中的 forward 方法，它接收一个张量 `x`
+        # 然后进行 `x = torch.permute(x, (0, 4, 1, 2, 3))`
+        # Conv3d(3, 16, (1, 3, 3), stride=(1, 3, 3)) 意味着 Conv3d 期望输入形状是 (B, C_in, D, H_in, W_in)，其中 C_in=3。
+        # 如果原始输入是 (B, C, T, H, W)，permute 后是 (B, W, C, T, H)。
+        # 要让 C_in 变成 3，原始输入的第 3 个维度 (索引 2) 应该是通道 C。
+        # 这意味着 IrisXeonNet 的 `forward(x)` 期望 `x` 的形状是 (B, T, H, W, C) 吗？
+        # 如果是 (B, T, H, W, C)，permute (0, 4, 1, 2, 3) -> (B, C, T, H, W)
+        # 这与我们数据加载器返回的 (C, T, H, W) 或训练循环中的 (B, C, T, H, W) 相匹配。
+        # 所以，假设 IrisXeonNet 期望的输入是 (B, T, H, W, C)，并且 forward 方法内部的 permute 是为了将其转换为 Conv3d 习惯的 (B, C, T, H, W)。
+        # 但是，在 train_generator.py 中，我们已经将数据 permute 成了 (B, C, T, W, H) 或 (B, C, T, H, W)。
+        # 如果 IrisXeonNet 期望 (B, T, H, W, C)，那么在调用 atn_model(x) 之前，我们需要将 (B, C, T, H, W) 转换为 (B, T, H, W, C)。
+        # 这意味着 permute (0, 2, 3, 4, 1)
+        # 假设 x 输入到 get_atn_outputs 是 (B, C, T, H, W)
+        # 为了匹配 IrisXeonNet 的 forward 内部 permute 前的形状，我们需要先 permute
+        # x_for_atn = x.permute(0, 2, 3, 4, 1) # (B, C, T, H, W) -> (B, T, H, W, C)
 
-    # 如果模型forward不支持这些参数或返回结构不同，需要在这里适配
-    # 例如：如果 atn_model(x) 总是返回一个包含所有输出的字典
-    # result['features'] = outputs.get('features')
-    # result['decision'] = outputs.get('decision')
-    # result['attention'] = outputs.get('attention')
+        # 再次查看 train_generator.py 里面的 permute
+        # real_x = batch_data.to(device) # real_x shape: (B, C, T, H, W)
+        # real_x = real_x.permute(0, 1, 2, 4, 3) # (B, C, T, H, W) -> (B, C, T, W, H) to match Generator/Discriminator expectation
+        # adversarial_x = real_x + delta # delta is (B, C, T, W, H)
+        # adversarial_x = torch.clamp(adversarial_x, 0, 1) # Still (B, C, T, W, H)
+        # original_atn_outputs = get_atn_outputs(atn_model, real_x, ...) # passing (B, C, T, W, H) ? No, passing real_x -> (B, C, T, W, H)
+        # adversarial_atn_outputs = get_atn_outputs(atn_model, real_x, ...) # Still passing real_x. THIS IS WRONG! Should pass adversarial_x!
+        # Also, the input to get_atn_outputs is expected to be in original image space (B, C, T, H, W), not feature space.
+        # The Generator takes real_x in feature space (B, 128, N, W, H) and outputs delta (B, 128, N, W, H).
+        # THEN adversarial_features = original_features + delta.
+
+        # Let's re-evaluate the get_atn_outputs usage in train_generator.py
+        # It is called with get_atn_outputs(atn_model, real_x, return_features=True, ...)
+        # and get_atn_outputs(atn_model, real_x, return_features=True, ...) - both called with real_x
+        # this is wrong. It should be original_atn_outputs = get_atn_outputs(atn_model, real_x)
+        # AND adversarial_atn_outputs = get_atn_outputs(atn_model, adversarial_x)
+        # And ATN takes original image data (B, C, T, H, W), not permuted or feature data.
+        # The Generator/Discriminator operate on features (B, 128, N, W, H).
+
+        # Okay, let's correct the train_generator.py logic *and* assume get_atn_outputs expects (B, C, T, H, W) and IrisXeonNet expects (B, T, H, W, C).
+        # In train_generator.py, the data loader returns (C, T, H, W), stacked by DataLoader to (B, C, T, H, W).
+        # It is then permuted to (B, C, T, W, H) for Generator/Discriminator. This permute seems wrong based on Generator kernel sizes.
+        # Generator kernel (1, 4, 4) with stride (1, 2, 2) padding (0, 1, 1) on input (B, C, N, W, H) downsamples W and H by 2.
+        # If input was (B, C, N, H, W), it would downsample H and W by 2. The typical convention is (B, C, D, H, W).
+        # So let's assume Generator expects (B, C, N, H, W) and data loader returns (B, C, T, H, W) with N=T.
+
+        # Correction in train_generator.py:
+        # Remove `real_x = real_x.permute(0, 1, 2, 4, 3)`
+        # Calculate delta: `delta = generator(original_features)` - Generator input is features.
+        # Calculate adversarial_features: `adversarial_features = original_features + delta`.
+        # Clamp adversarial_features.
+        # Discriminator takes features.
+
+        # Now, how to get original_features from the ATN model?
+        # The ATN model (IrisXeonNet) takes original image data (B, C, T, H, W)
+        # and returns features (B, 128, T', H', W').
+
+        # Okay, the `get_atn_outputs` function should take the original image `real_x` (B, C, T, H, W)
+        # It should pass this to `atn_model`.
+        # The `atn_model` (IrisXeonNet) expects input shape (B, T, H, W, C), permutes it to (B, C, T, H, W) internally.
+        # So, inside `get_atn_outputs`, we need to permute `x` from (B, C, T, H, W) to (B, T, H, W, C) before passing it to `atn_model.forward`.
+
+        x_for_atn_forward = x.permute(0, 2, 3, 4, 1) # (B, C, T, H, W) -> (B, T, H, W, C)
+
+        # Call the actual ATN model (IrisXeonNet) forward
+        # IrisXeonNet().forward(x) returns the feature tensor (B, 128, T', H', W')
+        # It does not return decision or attention maps directly.
+        # So, this function can *only* return features if the model is IrisXeonNet.
+        features = atn_model(x_for_atn_forward) # This calls IrisXeonNet.forward
+
+    # Return only features for now, as IrisXeonNet doesn't output others
+    result = {'features': features}
+
+    # If we ever get the full ATN model that wraps IrisXeonNet and adds decision/attention heads,
+    # this function would need to be updated to call the full ATN model's forward,
+    # which hopefully returns a dict like {'features':..., 'decision':..., 'attention':...}
+    # For now, print warnings if decision or attention were requested but not available.
+    if return_decision:
+        print("Warning: Decision map requested but IrisXeonNet does not return it directly.")
+    if return_attention:
+         print("Warning: Attention matrix requested but IrisXeonNet does not return it directly.")
+
 
     return result
 
-# TODO: 获取原始特征层数据的占位符
-def get_original_features(original_input):
-    """
-    占位符：通过 ATN 模型获取原始输入的特征层。
-    这可能需要修改 ATN 模型以暴露中间层的输出。
-    目前模拟为原始输入本身。
-    """
-    print("Placeholder: Getting original features from ATN.")
-    # 模拟返回原始输入作为特征层
-    return original_input # 假设特征层就是输入 (B, 128, N, W, H)
 
-# TODO: 获取对抗样本下 ATN 输出的占位符
-def get_atn_outputs(atn_model, adversarial_input):
-    """
-    占位符：获取对抗样本下的 ATN 输出 (决策图和注意力矩阵)。
-    """
-    print("Placeholder: Getting ATN outputs for adversarial input.")
-    # 调用模拟的 ATN 模型
-    return atn_model(adversarial_input) 
+# Keep the placeholder functions below if they are still used elsewhere,
+# but they should ideally be replaced with logic that uses the actual ATN model outputs.
+
+# TODO: 获取原始特征层数据的占位符 - NOW USES REAL ATN
+# def get_original_features(original_input):
+#    ...
+
+# TODO: 获取对抗样本下 ATN 输出的占位符 - NOW USES REAL ATN
+# def get_atn_outputs(atn_model, adversarial_input):
+#    ... 

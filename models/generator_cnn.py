@@ -16,15 +16,15 @@ class Generator(nn.Module):
 
         # Encoder
         self.encoder = nn.Sequential(
-            nn.Conv3d(in_channels, base_channels * 4, kernel_size=(1, 4, 4), stride=(1, 2, 2), padding=(0, 1, 1), bias=False),
+            nn.Conv3d(in_channels, base_channels * 4, kernel_size=(1, 3, 3), stride=(1, 2, 2), padding=(0, 1, 1), bias=False),
             nn.BatchNorm3d(base_channels * 4),
             nn.ReLU(inplace=True),
 
-            nn.Conv3d(base_channels * 4, base_channels * 8, kernel_size=(1, 4, 4), stride=(1, 2, 2), padding=(0, 1, 1), bias=False),
+            nn.Conv3d(base_channels * 4, base_channels * 8, kernel_size=(1, 3, 3), stride=(1, 2, 2), padding=(0, 1, 1), bias=False),
             nn.BatchNorm3d(base_channels * 8),
             nn.ReLU(inplace=True),
 
-            nn.Conv3d(base_channels * 8, base_channels * 16, kernel_size=(4, 4, 4), stride=(2, 2, 2), padding=(1, 1, 1), bias=False),
+            nn.Conv3d(base_channels * 8, base_channels * 16, kernel_size=(1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1), bias=False),
             nn.BatchNorm3d(base_channels * 16),
             nn.ReLU(inplace=True),
         )
@@ -43,15 +43,15 @@ class Generator(nn.Module):
         # Decoder
         decoder_input_channels = current_bottleneck_input_channels #512
         self.decoder = nn.Sequential(
-            nn.ConvTranspose3d(decoder_input_channels, base_channels * 8, kernel_size=(4, 4, 4), stride=(2, 2, 2), padding=(1, 1, 1), bias=False),
+            nn.ConvTranspose3d(decoder_input_channels, base_channels * 8, kernel_size=(1, 3, 3), stride=(1, 2, 2), padding=(0, 1, 1), output_padding=(0, 1, 1), bias=False),
             nn.BatchNorm3d(base_channels * 8),
             nn.ReLU(inplace=True),
 
-            nn.ConvTranspose3d(base_channels * 8, base_channels * 4, kernel_size=(1, 4, 4), stride=(1, 2, 2), padding=(0, 1, 1), bias=False),
+            nn.ConvTranspose3d(base_channels * 8, base_channels * 4, kernel_size=(1, 3, 3), stride=(1, 2, 2), padding=(0, 1, 1), bias=False),
             nn.BatchNorm3d(base_channels * 4),
             nn.ReLU(inplace=True),
 
-            nn.ConvTranspose3d(base_channels * 4, out_channels, kernel_size=(1, 4, 4), stride=(1, 2, 2), padding=(0, 1, 1), bias=False),
+            nn.ConvTranspose3d(base_channels * 4, out_channels, kernel_size=(1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1), bias=False),
             nn.BatchNorm3d(out_channels),
             nn.ReLU(inplace=True),
         )
@@ -80,6 +80,7 @@ class Generator(nn.Module):
             adjusted_decoded = decoded
 
         # 最终扰动
+        print(f"Debug: Adjusted decoded shape before output layer: {adjusted_decoded.shape}")
         delta = self.output_layer(adjusted_decoded)
         
         assert delta.shape == x.shape, f"Output delta shape {delta.shape} does not match input shape {x.shape}"
