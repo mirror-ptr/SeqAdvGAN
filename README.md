@@ -203,8 +203,8 @@ python scripts/visualize_results.py \
 
 我们非常欢迎对本项目做出贡献！如果您有任何想法、建议或遇到了问题，请随时通过以下方式联系我们或参与：
 
-*   提交 [Issue](link_to_your_issues) 报告 Bug 或提出功能请求。（请替换 `link_to_your_issues` 为您的实际 Issues 页面链接）
-*   提交 [Pull Request](link_to_your_pull_requests) 贡献您的代码或改进。（请替换 `link_to_your_pull_requests` 为您的实际 Pull Requests 页面链接）
+*   提交 [Issue](link_to_your_issues) 报告 Bug 或提出功能请求。
+*   提交 [Pull Request](link_to_your_pull_requests) 贡献您的代码或改进。
 
 ## ❤️ 致谢
 
