@@ -6,7 +6,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import torch
 import numpy as np
 # 可能需要安装 piq 库来计算 LPIPS 或 SSIM: pip install piq
-# from piq import LPIPS, ssim
+import torch.nn.functional as F # Import F for F.mse_loss
+# from piq import LPIPS, ssim # Import piq metrics inside the function
 
 # 扰动范数
 from losses.regularization_losses import linf_norm, l2_norm
@@ -14,20 +15,24 @@ from losses.regularization_losses import linf_norm, l2_norm
 # 导入 ATN 工具
 from utils.atn_utils import get_atn_outputs
 
+# Import mask loading/generation utility if needed
+# from utils.mask_utils import load_or_generate_mask # Placeholder
+
+
 # TODO: 定义攻击成功率的衡量标准
-def calculate_attack_success_rate(original_decision_map: torch.Tensor,
-                                adversarial_decision_map: torch.Tensor,
+def calculate_attack_success_rate(original_map: torch.Tensor,
+                                adversarial_map: torch.Tensor,
                                 success_threshold: float,
-                                success_criterion: str = 'mse_diff_threshold', # 添加成功标准参数
+                                success_criterion: str = 'mse_diff_threshold', # Add success criterion parameter
                                 higher_is_better_orig: bool = True,
-                                topk_k: int = 10): # 添加 Top-K 的 K 值参数
+                                topk_k: int = 10): # Add Top-K K value parameter
     """
     计算攻击成功率。
     根据你对 ATN 决策图含义的理解来定义成功标准。
 
     Args:
-        original_decision_map (torch.Tensor): 原始样本下的ATN最终输出 (B, W, H)。
-        adversarial_decision_map (torch.Tensor): 对抗样本下的ATN最终输出 (B, W, H)。
+        original_decision_map (torch.Tensor): 原始样本下的ATN最终输出 (B, W, H) or (B, H, W).
+        adversarial_decision_map (torch.Tensor): 对抗样本下的ATN最终输出 (B, W, H) or (B, H, W).
         success_threshold (float): 判断攻击成功的阈值。其含义取决于 success_criterion。
         success_criterion (str): 攻击成功的衡量标准。可选：
                                  - 'mse_diff_threshold': 对抗样本和原始样本决策图的 MSE 差异大于阈值。
@@ -44,177 +49,269 @@ def calculate_attack_success_rate(original_decision_map: torch.Tensor,
     Returns:
         float: 攻击成功率 (0 到 1 之间的值)。
     """
-    if original_decision_map is None or adversarial_decision_map is None:
-        print("Warning: Decision maps are None in calculate_attack_success_rate. Returning 0.0 success rate.")
+    if original_map is None or adversarial_map is None:
+        print(f"Warning: Original or adversarial map is None for criterion '{success_criterion}'. Returning 0.0 success rate.")
         return 0.0
 
-    B, W, H = original_decision_map.shape
-    if B == 0: return 0.0
+    # Ensure maps have at least batch dimension
+    if original_map.ndim == 0 or adversarial_map.ndim == 0:
+         print(f"Warning: Original or adversarial map is scalar for criterion '{success_criterion}'. Cannot calculate success rate on scalars.")
+         return 0.0
+
+    assert original_map.shape == adversarial_map.shape
+    batch_size = original_map.shape[0]
+    if batch_size == 0: return 0.0
+
     successful_attacks = 0
 
-    # 展平 W x H 维度，方便 Top-K 操作
-    original_decision_flat = original_decision_map.view(B, -1) # Shape (B, W*H)
-    adversarial_decision_flat = adversarial_decision_map.view(B, -1) # Shape (B, W*H)
-    spatial_size = W * H
-
     if success_criterion == 'mse_diff_threshold':
-        # 示例1: 基于 MSE 差异
-        # 攻击成功：MSE 差异大于阈值
-        decision_mse = torch.mean((adversarial_decision_map - original_decision_map)**2, dim=(-1,-2))
-        successful_attacks = torch.sum(decision_mse > success_threshold).item()
+        # MSE 差异：对抗样本与原始样本的 MSE 差异大于阈值即视为攻击成功
+        # Need to handle different input dimensions (B, H, W) or (B, head, N, N)
+        # Flatten all dimensions except batch for MSE calculation per sample
+        original_flat = original_map.view(batch_size, -1)
+        adversarial_flat = adversarial_map.view(batch_size, -1)
+
+        mse_diff = torch.mean((adversarial_flat - original_flat)**2, dim=1) # Mean over flattened dimensions
+        successful_attacks = (mse_diff > success_threshold).sum().item()
 
     elif success_criterion == 'mean_change_threshold':
-        # 示例2: 基于平均值的变化
-        original_mean = original_decision_flat.mean(dim=1)
-        adversarial_mean = adversarial_decision_flat.mean(dim=1)
-        if higher_is_better_orig:
-            # 攻击成功：原始均值 - 对抗均值 > 阈值
-            successful_attacks = torch.sum(original_mean - adversarial_mean > success_threshold).item()
-        else:
-            # 攻击成功：对抗均值 - 原始均值 > 阈值
-            successful_attacks = torch.sum(adversarial_mean - original_mean > success_threshold).item()
-
-    elif success_criterion == 'topk_value_drop':
-        # 攻击成功：原始决策图 Top-K 位置的值在对抗样本中平均下降超过阈值
-        if topk_k <= 0 or topk_k > spatial_size:
-            print(f"Warning: Invalid topk_k value {topk_k} for topk_value_drop criterion. Must be between 1 and {spatial_size}. Returning 0.0 success rate.")
+        # 平均值变化：决策图的平均值变化大于指定阈值
+        # This criterion is likely only applicable to decision maps or feature maps, not attention maps
+        if original_map.ndim not in [2, 3]: # Expecting (H, W) or (B, H, W) if not batched, or (B, H, W)
+            print(f"Warning: Mean change criterion expects 2D/3D input (H, W) or (B, H, W), got {original_map.ndim}D. Skipping.")
             return 0.0
 
-        # 找到原始决策图的 Top-K 值和索引
-        topk_values_orig, topk_indices_orig = torch.topk(
-            original_decision_flat,
-            k=topk_k,
-            dim=-1,
-            largest=True # 假设原始决策图高值更重要
+        # Ensure input is (B, X), flatten if needed
+        original_flat = original_map.view(batch_size, -1)
+        adversarial_flat = adversarial_map.view(batch_size, -1)
+
+        original_mean = original_flat.mean(dim=1)
+        adversarial_mean = adversarial_flat.mean(dim=1)
+
+        if higher_is_better_orig: # 原始值越高越好，希望对抗后降低 (original - adversarial > threshold)
+            change = original_mean - adversarial_mean
+        else: # 原始值越低越好，希望对抗后升高 (adversarial - original > threshold)
+            change = adversarial_mean - original_mean
+
+        successful_attacks = (change > success_threshold).sum().item()
+
+    elif success_criterion == 'topk_value_drop':
+        # 针对注意力图：原始 top-K 位置的注意力值在对抗样本中显著下降
+        # Requires at least 2 spatial/sequence dimensions (N, N) or batched (B, head, N, N)
+        if original_map.ndim < 2:
+            print(f"Warning: Top-K value drop criterion requires at least 2 dimensions (e.g., flattened attention or spatial), got {original_map.ndim}D. Skipping.")
+            return 0.0
+
+        # Flatten to (B, num_features)
+        if original_map.ndim == 4: # (B, head, N, N) -> (B, head * N * N)
+            original_flat = original_map.view(batch_size, -1)
+            adversarial_flat = adversarial_map.view(batch_size, -1)
+        elif original_map.ndim == 3: # (B, H, W) -> (B, H*W)
+             original_flat = original_map.view(batch_size, -1)
+             adversarial_flat = adversarial_map.view(batch_size, -1)
+        elif original_map.ndim == 2: # Assuming (B, N*N) or (B, H*W)
+             original_flat = original_map
+             adversarial_flat = adversarial_map
+        else:
+             print(f"Warning: Top-K value drop criterion unsupported for {original_map.ndim}D input. Skipping.")
+             return 0.0
+
+
+        # Ensure topk_k 不超过扁平化后的维度大小
+        effective_k = min(topk_k, original_flat.shape[-1])
+        if effective_k <= 0: return 0.0 # Avoid error if k is invalid after min
+
+        # 在原始 map 的扁平化维度上找到 Top-K 值和索引
+        # original_topk_values shape (B, effective_k)
+        # original_topk_indices shape (B, effective_k)
+        original_topk_values, original_topk_indices = torch.topk(
+            original_flat,
+            k=effective_k,
+            dim=-1,       # 在最后一个维度上找 Top-K (展平后的)
+            largest=True, # 找最大的 K 个值
+            sorted=False
         )
 
         # 获取对抗样本在原始 Top-K 索引位置上的值
-        adversarial_values_at_topk_indices = torch.gather(
-            adversarial_decision_flat,
-            dim=-1,
-            index=topk_indices_orig
+        # 使用 gather 函数
+        # adversarial_values_at_original_topk shape (B, effective_k)
+        adversarial_values_at_original_topk = torch.gather(
+            adversarial_flat,
+            dim=-1,       # 在最后一个维度上根据索引收集
+            index=original_topk_indices # 使用原始 Top-K 的索引
         )
 
-        # 计算这些位置的值下降量 (原始值 - 对抗值)
-        value_drop = topk_values_orig - adversarial_values_at_topk_indices
+        # 计算下降比例 (原始值 - 对抗值) / 原始值
+        # 避免除以零，如果原始值为 0，则下降比例也为 0
+        value_drop = torch.where(
+            original_topk_values > 1e-6, # Avoid division by near-zero
+            (original_topk_values - adversarial_values_at_original_topk) / (original_topk_values),
+            torch.zeros_like(original_topk_values) # If original value is near zero, drop is zero
+        )
 
-        # 计算每个样本 Top-K 位置的平均值下降
+        # 计算每个样本的平均下降比例
         mean_value_drop_per_sample = value_drop.mean(dim=-1) # Shape (B,)
 
-        # 攻击成功：平均值下降超过阈值
-        successful_attacks = torch.sum(mean_value_drop_per_sample > success_threshold).item()
+        # 攻击成功 if 平均下降比例 > 阈值
+        successful_attacks = (mean_value_drop_per_sample > success_threshold).sum().item()
 
     elif success_criterion == 'topk_position_change':
-        # 攻击成功：原始决策图 Top-K 位置在对抗样本中的 Top-K 位置至少有一个不同
-        if topk_k <= 0 or topk_k > spatial_size:
-             print(f"Warning: Invalid topk_k value {topk_k} for topk_position_change criterion. Must be between 1 and {spatial_size}. Returning 0.0 success rate.")
+        # 针对注意力图：原始 top-K 注意力位置与对抗样本 top-K 注意力位置的交集小于阈值
+        # Requires at least 2 spatial/sequence dimensions (N, N) or batched (B, head, N, N)
+        if original_map.ndim < 2:
+            print(f"Warning: Top-K position change criterion requires at least 2 dimensions, got {original_map.ndim}D. Skipping.")
+            return 0.0
+
+        # Flatten to (B, num_features)
+        if original_map.ndim == 4: # (B, head, N, N) -> (B, head * N * N)
+            original_flat = original_map.view(batch_size, -1)
+            adversarial_flat = adversarial_map.view(batch_size, -1)
+        elif original_map.ndim == 3: # (B, H, W) -> (B, H*W)
+             original_flat = original_map.view(batch_size, -1)
+             adversarial_flat = adversarial_map.view(batch_size, -1)
+        elif original_map.ndim == 2: # Assuming (B, N*N) or (B, H*W)
+             original_flat = original_map
+             adversarial_flat = adversarial_map
+        else:
+             print(f"Warning: Top-K position change criterion unsupported for {original_map.ndim}D input. Skipping.")
              return 0.0
 
-        # 找到原始决策图的 Top-K 索引
-        _, topk_indices_orig = torch.topk(
-             original_decision_flat,
-             k=topk_k,
+        effective_k = min(topk_k, original_flat.shape[-1])
+        if effective_k <= 0: return 0.0
+
+        # Find Top-K indices in the original and adversarial maps
+        _, original_topk_indices = torch.topk(
+            original_flat,
+            k=effective_k,
              dim=-1,
-             largest=True
+            largest=True,
+            sorted=False
+        )
+        _, adversarial_topk_indices = torch.topk(
+            adversarial_flat,
+            k=effective_k,
+             dim=-1,
+            largest=True,
+            sorted=False
         )
 
-        # 找到对抗样本的 Top-K 索引
-        _, topk_indices_adv = torch.topk(
-             adversarial_decision_flat,
-             k=topk_k,
-             dim=-1,
-             largest=True
-        )
+        # Convert indices to sets for each sample and calculate intersection ratio
+        for i in range(batch_size):
+            orig_set = set(original_topk_indices[i].cpu().numpy())
+            adv_set = set(adversarial_topk_indices[i].cpu().numpy())
 
-        # 检查原始 Top-K 索引集合与对抗 Top-K 索引集合是否有差异
-        # 将索引转换为集合进行比较 (需要注意批次维度)
-        # 攻击成功：如果对于任一样本，其原始 Top-K 索引集合与对抗 Top-K 索引集合不同
-        successful_attacks = 0
-        for i in range(B):
-             set_orig = set(topk_indices_orig[i].tolist())
-             set_adv = set(topk_indices_adv[i].tolist())
-             if set_orig != set_adv:
-                  successful_attacks += 1
+            intersection_size = len(orig_set.intersection(adv_set))
+            # Calculate ratio of intersection size to effective k
+            intersection_ratio = intersection_size / effective_k if effective_k > 0 else 0.0
 
+            # Attack successful if intersection ratio is below the threshold (i.e., positions changed significantly)
+            if intersection_ratio < success_threshold:
+                successful_attacks += 1
 
-    elif success_criterion == 'region_mean_change_threshold':
-         # TODO: 实现基于特定区域平均值变化的成功标准
-         # 需要额外的 region_mask 参数传入此函数
-         print("Warning: 'region_mean_change_threshold' criterion requires region mask and is not fully implemented.")
-         return 0.0 # Placeholder
-
-    elif success_criterion == 'classification_change':
-         # TODO: 实现基于最终分类结果变化的成功标准
-         # 这需要 ATN 输出分类结果，或者有一个从决策图到分类结果的映射函数。
-         print("Warning: 'classification_change' criterion requires ATN classification output and is not implemented.")
-         return 0.0 # Placeholder
-
-    elif success_criterion == 'decision_map_divergence':
-         # TODO: 实现基于决策图分布变化的成功标准 (KL/JS 散度)
-         # 需要将决策图转换为概率分布 (例如，Softmax)，然后计算散度。
-         print("Warning: 'decision_map_divergence' criterion requires distribution conversion and is not implemented.")
-         return 0.0 # Placeholder
+    # elif success_criterion == 'classification_change':
+    #      # TODO: Implement classification change criterion if applicable
+    #      print("Warning: 'classification_change' criterion is not implemented.")
+    #      return 0.0
 
     else:
-        raise ValueError(f"Unsupported success criterion: {success_criterion}")
+        print(f"Warning: Unsupported success criterion: {success_criterion}. Returning 0.0 success rate.")
+        return 0.0
 
+    return successful_attacks / batch_size
 
-    return successful_attacks / B
-
-# 计算扰动范数 (通常在训练脚本中直接调用或通过 vis_utils 记录)
+# Calculate perturbation norms (usually called directly in training script or logged via vis_utils)
 # from losses.regularization_losses import linf_norm, l2_norm
 
-# TODO: 将特征层转换为可进行 LPIPS 或 SSIM 感知评估的形式
-# 这可能是最挑战的部分，需要朋友的帮助或查阅相关文献
+# TODO: Convert feature layers to a format suitable for LPIPS or SSIM perceptual evaluation
+# This is likely the most challenging part, requiring help from your friend or relevant literature.
 def features_to_perceptual_input(features: torch.Tensor, sequence_step=0):
     """
-    将 (B, C, N, W, H) 特征张量转换为 (B, 3, H, W) 或 (B, 1, H, W)
-    等适合 LPIPS 或 SSIM 输入的图像格式。
-    这需要深入理解 ATN 的特征如何映射回图像空间，或者找到一种通用的特征可视化方法。
+    Converts a (B, C, N, W, H) or (B, C, N, H, W) feature tensor to (B, 3, H', W')
+    or (B, 1, H', W') image format suitable for LPIPS or SSIM input.
+    This requires deep understanding of how ATN features map back to image space,
+    or finding a generic feature visualization method.
 
     Args:
-        features (torch.Tensor): 输入特征张量 (B, C, N, W, H)。
-        sequence_step (int): 选择哪个序列步骤进行转换。
+        features (torch.Tensor): Input feature tensor (B, C, N, W, H) or (B, C, N, H, W).
+        sequence_step (int): Which sequence step to convert.
 
     Returns:
-        torch.Tensor: 适合感知评估的图像张量，例如 (B, 3, H, W) 或 (B, 1, H, W)。
-                      注意：这是一个占位符实现，直接使用 ATN 特征计算感知指标的有效性未知。
+        torch.Tensor: Image tensor suitable for perceptual evaluation, e.g., (B, 3, H', W') or (B, 1, H', W').
+                      Note: This is a placeholder implementation; the validity of calculating perceptual metrics directly on ATN features is unknown.
     """
-    print("Note: Using a placeholder implementation for features_to_perceptual_input.")
-    B, C, N, W, H = features.shape
+    if features is None or features.numel() == 0:
+        print("Warning: Empty sequence dimension in features. Cannot convert for perceptual metrics.")
+        # Return an empty tensor for subsequent calculations to handle
+        # Return empty tensor matching expected output shape, e.g., (0, 3, H, W)
+        # Need to infer H, W from input if possible, or use a default/config value
+        # Let's assume the last two dimensions are spatial (H, W)
+        # Need at least 3 dimensions (B, C, N, H, W) or (B, C, N, W, H)
+        if features is not None and features.ndim >= 4:
+             # Assuming last two dims are spatial H, W (or W, H)
+             spatial_dims = features.shape[-2:]
+             return torch.empty(0, 3, spatial_dims[0], spatial_dims[1], device=features.device, dtype=features.dtype)
+        else:
+             # If features is None or not enough dimensions, return empty with arbitrary shape
+             return torch.empty(0, 3, 64, 64, device='cpu', dtype=torch.float32) # Default shape
+
+    # print("Note: Using a placeholder implementation for features_to_perceptual_input.")
+    # Assuming features shape is (B, C, N, H, W) based on Generator/Discriminator definition
+    # Need to handle potential (B, C, N, W, H)
+    if features.ndim != 5:
+         print(f"Warning: Features tensor is not 5D ({features.ndim}D) for perceptual input conversion.")
+         # Attempt to handle if it's (B, C, H, W) by adding sequence dim
+         if features.ndim == 4: # Assuming (B, C, H, W)
+              print("Assuming 4D input is (B, C, H, W), adding sequence dim for compatibility check.")
+              features = features.unsqueeze(2) # (B, C, 1, H, W)
+              B, C, N, H, W = features.shape # Re-read shape
+         else:
+              return torch.empty(0, 3, 64, 64, device=features.device, dtype=features.dtype)
+
+    B, C, N, H, W = features.shape
     if N == 0:
         print("Warning: Empty sequence dimension in features. Cannot convert for perceptual metrics.")
-        # 返回一个空张量，以便后续计算能处理
-        # 根据期望的输出形状返回空张量，例如 (0, 3, H, W)
         return torch.empty(0, 3, H, W, device=features.device, dtype=features.dtype)
 
-    if sequence_step >= N:
+
+    if sequence_step >= N or sequence_step < 0:
         print(f"Warning: sequence_step {sequence_step} is out of bounds for N={N}. Defaulting to 0.")
-        sequence_step = 0 # 默认可视化第一个步骤
+        sequence_step = 0 # Default to first step
 
-    features_step = features[:, :, sequence_step, :, :] # (B, C, W, H)
+    # Ensure features are in (B, C, H, W) format for processing
+    # If input was (B, C, N, W, H), permute it here
+    # We need to know the expected spatial order. Assuming (H, W).
+    # If your features are (B, C, N, W, H), uncomment/adjust the following:
+    # features = features.permute(0, 1, 2, 4, 3) # (B, C, N, W, H) -> (B, C, N, H, W)
 
-    # 简单转换：如果通道数大于等于3，取前3个；否则取第一个并复制到3通道 (以满足LPIPS/SSIM对3通道的要求)
+    features_step = features[:, :, sequence_step, :, :] # (B, C, H, W)
+
+    # Simple conversion: if channels >= 3, take first 3; otherwise, take first and repeat to 3 channels
+    # (to satisfy LPIPS/SSIM requirement for 3 channels)
     if C >= 3:
-        perceptual_img = features_step[:, :3, :, :] # (B, 3, W, H)
+        perceptual_img = features_step[:, :3, :, :] # (B, 3, H, W)
     elif C == 1:
-        perceptual_img = features_step.repeat(1, 3, 1, 1) # (B, 1, W, H) -> (B, 3, W, H)
+        perceptual_img = features_step.repeat(1, 3, 1, 1) # (B, 1, H, W) -> (B, 3, H, W)
     else: # e.g., C=2, take first channel and repeat to 3 channels
-        perceptual_img = features_step[:, 0, :, :].unsqueeze(1).repeat(1, 3, 1, 1) # (B, 3, W, H)
+        # Ensure channel dimension exists even if C=0 before unsqueeze/repeat
+        if C > 0:
+            perceptual_img = features_step[:, 0, :, :].unsqueeze(1).repeat(1, 3, 1, 1) # (B, 3, H, W)
+        else:
+             print("Warning: Feature channels C=0. Cannot create perceptual image.")
+             return torch.empty(0, 3, H, W, device=features.device, dtype=features.dtype)
 
 
-    # 归一化到感知指标通常期望的范围，例如 [0, 1]
-    # 这是一个简单的 min-max 归一化，可能需要根据 ATN 特征的实际分布进行调整
+    # Normalize to the range typically expected by perceptual metrics, e.g., [0, 1]
+    # This is a simple min-max normalization, may need adjustment based on actual ATN feature distribution.
     min_val = perceptual_img.min() if perceptual_img.numel() > 0 else 0.0
     max_val = perceptual_img.max() if perceptual_img.numel() > 0 else 1.0
 
-    if max_val > min_val:
+    if max_val > min_val: # Avoid division by zero
         perceptual_img = (perceptual_img - min_val) / (max_val - min_val + 1e-8)
     else:
         # Handle case where all values are the same or tensor is empty
         perceptual_img = torch.zeros_like(perceptual_img) # Or fill with 0.5 for mid-gray if appropriate
 
-    # LPIPS/SSIM 通常期望 float 类型的输入
+    # LPIPS/SSIM usually expect float type input
     return perceptual_img.float() # Ensure float type
 
 
@@ -228,36 +325,54 @@ def calculate_psnr(img1: torch.Tensor, img2: torch.Tensor, data_range=1.0):
     Returns:
         torch.Tensor: 每张图片的 PSNR 值 (形状 B)。
     """
-    mse = torch.mean((img1 - img2) ** 2, dim=(-3, -2, -1)) # 对 C, H, W 维度求平均
-    # 避免 log(0)
+    if img1 is None or img2 is None or img1.numel() == 0 or img2.numel() == 0:
+        print("Warning: Input images for PSNR are None or empty.")
+        # Return NaN tensor or handle appropriately
+        # Determine a batch size to return a tensor of correct size with NaNs
+        batch_size = max(img1.shape[0] if img1 is not None else 0, img2.shape[0] if img2 is not None else 0)
+        if batch_size == 0: return torch.tensor([]) # Return empty if no batch dim info
+        return torch.full((batch_size,), float('nan'), device=img1.device if img1 is not None else (img2.device if img2 is not None else 'cpu'))
+
+
+    # Ensure shapes match except batch dimension
+    if img1.shape[1:] != img2.shape[1:]:
+        print(f"Error: Image shapes for PSNR calculation mismatch: {img1.shape} vs {img2.shape}")
+        # Return NaN tensor for the batch size
+        return torch.full((img1.shape[0],), float('nan'), device=img1.device)
+
+
+    mse = torch.mean((img1 - img2) ** 2, dim=(-3, -2, -1)) # Average over C, H, W dimensions
+    # Avoid log(0)
     mse = torch.clamp(mse, min=1e-10)
     psnr = 20 * torch.log10(data_range / torch.sqrt(mse))
     return psnr
 
 def calculate_perceptual_metrics(original_features: torch.Tensor,
                                  adversarial_features: torch.Tensor,
-                                 device: torch.device):
+                                 device: torch.device,
+                                 sequence_step_to_vis: int = 0): # Add sequence step parameter
     """
     计算 LPIPS, SSIM, PSNR 等感知评估指标。
     Args:
-        original_features (torch.Tensor): 原始特征层 (B, C, N, W, H)。
-        adversarial_features (torch.Tensor): 对抗性特征层 (B, C, N, W, H)。
+        original_features (torch.Tensor): 原始特征层 (B, C, N, W, H) or (B, C, N, H, W).
+        adversarial_features (torch.Tensor): 对抗性特征层 (B, C, N, W, H) or (B, C, N, H, W).
         device (torch.device): 计算设备。
+        sequence_step_to_vis (int): 选择序列中的哪个步骤进行可视化和感知评估。
     Returns:
         dict: 包含感知指标的字典。
               注意：这些指标计算在将 ATN 特征转换为图像格式后，其有效性未知。
     """
     metrics = {}
 
-    # 将特征转换为适合感知评估的图像 (选择第一个序列步骤为例)
-    # 将特征移动到 CPU 进行转换（如果转换函数不支持 GPU 操作），再移回设备计算指标
-    # perceptual_input_orig 和 perceptual_input_adv 形状应为 (B, 3, H, W) 或 (B, 1, H, W)
-    original_img_perceptual = features_to_perceptual_input(original_features, sequence_step=0).to(device)
-    adversarial_img_perceptual = features_to_perceptual_input(adversarial_features, sequence_step=0).to(device)
+    # Convert features to image format suitable for perceptual evaluation
+    # We need to specify which sequence step to use for the 2D image comparison
+    original_img_perceptual = features_to_perceptual_input(original_features, sequence_step=sequence_step_to_vis).to(device)
+    adversarial_img_perceptual = features_to_perceptual_input(adversarial_features, sequence_step=sequence_step_to_vis).to(device)
 
-    # 检查转换后的张量是否为空
-    if original_img_perceptual.shape[0] == 0 or adversarial_img_perceptual.shape[0] == 0:
-        print("Warning: Converted perceptual input tensors are empty. Skipping perceptual metric calculations.")
+
+    # Check if converted tensors are empty or shapes mismatch
+    if original_img_perceptual.shape[0] == 0 or adversarial_img_perceptual.shape[0] == 0 or original_img_perceptual.shape != adversarial_img_perceptual.shape:
+        print("Warning: Converted perceptual input tensors are empty or shapes mismatch. Skipping perceptual metric calculations.")
         metrics['psnr'] = float('nan')
         metrics['lpips'] = float('nan')
         metrics['ssim'] = float('nan')
@@ -266,9 +381,10 @@ def calculate_perceptual_metrics(original_features: torch.Tensor,
 
     # PSNR Calculation
     try:
-        # PSNR 可以在单通道或多通道图像上计算
+        # PSNR can be calculated on single-channel or multi-channel images
         psnr_vals = calculate_psnr(original_img_perceptual, adversarial_img_perceptual, data_range=1.0) # Assuming data is normalized to [0, 1]
-        metrics['psnr'] = psnr_vals.mean().item()
+        # calculate_psnr returns a tensor of shape (B,), take the mean, ignore NaNs
+        metrics['psnr'] = np.nanmean(psnr_vals.cpu().numpy()) if psnr_vals.numel() > 0 else float('nan')
     except Exception as e:
         print(f"Error calculating PSNR: {e}")
         metrics['psnr'] = float('nan')
@@ -278,31 +394,35 @@ def calculate_perceptual_metrics(original_features: torch.Tensor,
     try:
         from piq import LPIPS, ssim # type: ignore
         piq_available = True
+        # print("piq library found.")
     except ImportError:
-        print("Warning: 'piq' library not found. Skipping LPIPS/SSIM. Install with 'pip install piq'")
+        # print("Warning: 'piq' library not found. Skipping LPIPS/SSIM. Install with 'pip install piq'")
         piq_available = False
     except Exception as e:
         print(f"Warning: Error importing piq: {e}. Skipping LPIPS/SSIM.")
         piq_available = False
 
     if piq_available:
-        print("Attempting to calculate perceptual metrics (LPIPS, SSIM) using piq...")
+        # print("Attempting to calculate perceptual metrics (LPIPS, SSIM) using piq...")
         try:
-            # LPIPS: 通常输入范围是 [0,1] 或 [-1,1], 取决于预训练模型
-            # AlexNet LPIPS 通常需要3通道RGB图像
-            # features_to_perceptual_input 已经尝试确保输出是3通道
+            # LPIPS: Input range is typically [0,1] or [-1,1], depending on the pretrained model.
+            # AlexNet LPIPS usually requires 3-channel RGB images.
+            # features_to_perceptual_input attempts to ensure 3-channel output.
             # The LPIPS class in piq by default normalizes input from [0,1] to [-1,1].
             # So, providing [0,1] should be fine.
             if original_img_perceptual.shape[1] == 3:
-                 lpips_metric = LPIPS(net_type='alex', version='0.1').to(device)
-                 lpips_val = lpips_metric(original_img_perceptual, adversarial_img_perceptual).mean().item()
+                 # Ensure LPIPS metric is on the correct device
+                 lpips_metric = LPIPS(net_type='alex', version='0.1').to(device) # Re-initialize or move
+                 # lpips_metric expects tensors on the same device
+                 lpips_val = lpips_metric(original_img_perceptual * 2 - 1, adversarial_img_perceptual * 2 - 1).mean().item() # Map [0,1] to [-1,1]
                  metrics['lpips'] = lpips_val
             else:
                  print(f"Warning: LPIPS expects 3 channels, got {original_img_perceptual.shape[1]}. Skipping LPIPS.")
                  metrics['lpips'] = float('nan')
 
-            # SSIM: 通常输入范围是 [0,1] 或 [0, 255] (data_range 要匹配)
-            # SSIM 可以在单通道或多通道图像上计算
+            # SSIM: Input range is typically [0,1] or [0, 255] (data_range must match).
+            # SSIM can be calculated on single-channel or multi-channel images.
+            # perceptual_img is already float [0, 1]
             ssim_val = ssim(original_img_perceptual, adversarial_img_perceptual, data_range=1., reduction='mean').item()
             metrics['ssim'] = ssim_val
         except Exception as e:
@@ -316,151 +436,282 @@ def calculate_perceptual_metrics(original_features: torch.Tensor,
 
     return metrics
 
-# --- 示例如何在训练/评估脚本中使用 ---
-def evaluate_model(generator, discriminator, atn_model, dataloader, device, args):
+# --- Example of how to use in train/eval script ---
+def evaluate_model(generator, discriminator, atn_model, dataloader, device, cfg, current_train_stage):
     """
-    评估生成器和判别器的性能。
+    Evaluate the performance of the generator and discriminator based on the current training stage.
 
     Args:
-        generator (nn.Module): 生成器模型。
-        discriminator (nn.Module): 判别器模型。
-        atn_model (nn.Module): ATN 模型。
-        dataloader (DataLoader): 评估数据加载器。
-        device (torch.device): 计算设备。
-        args: 命令行参数 (应包含 eval_success_threshold, eval_success_criterion, topk_k 等)。
+        generator (nn.Module or None): Generator model (can be None if evaluating original data).
+        discriminator (nn.Module or None): Discriminator model (can be None if GAN metrics are not needed).
+        atn_model (nn.Module): ATN model.
+        dataloader (DataLoader): Evaluation data loader.
+        device (torch.device): Computation device.
+        cfg: Configuration object containing evaluation parameters.
+        current_train_stage (int): The current training stage (1 or 2).
 
     Returns:
-        dict: 包含评估指标的字典。
+        dict: Dictionary containing evaluation metrics.
     """
-    generator.eval()
-    discriminator.eval()
+    if generator is not None:
+        generator.eval()
+    if discriminator is not None:
+        discriminator.eval()
     atn_model.eval()
 
-    total_attack_success_rate = 0.0
+    # Initialize metrics storage
+    total_attack_success_rate_decision = 0.0
+    total_attack_success_rate_attention = 0.0
+    total_attack_success_rate_feature = 0.0 # New: Feature attack success rate for stage 1
+    total_linf_norm = 0.0
+    total_l2_norm = 0.0
+    avg_D_real_score = 0.0
+    avg_D_fake_score = 0.0
     total_samples = 0
-    all_linf_norms = []
-    all_l2_norms = []
-    all_psnr = [] # 添加 PSNR 列表
+    all_psnr = []
     all_lpips = []
     all_ssim = []
-    # TODO: 添加 GAN 评估指标，例如判别器对真实/伪造样本的平均输出
-    avg_D_real = 0.0
-    avg_D_fake = 0.0
 
-    # TODO: 如果数据加载器返回掩码，需要在这里接收
-    # for i, (original_features_batch, decision_mask_batch, attention_mask_batch) in enumerate(dataloader):
-    for i, original_features_batch in enumerate(dataloader):
-        original_features = original_features_batch.to(device)
-        batch_size = original_features.shape[0]
+    # Determine if perceptual metrics should be calculated (usually on image input)
+    # Assume perceptual metrics are relevant if the input data has 3 channels (like an image)
+    calculate_perceptual = cfg.data.channels == 3 # Assuming cfg.data.channels indicates input type
 
-        if batch_size == 0: continue # Skip empty batches
-
-        # TODO: 如果使用掩码，将掩码也移动到设备
-        # decision_mask = decision_mask_batch.to(device) if decision_mask_batch is not None else None
-        # attention_mask = attention_mask_batch.to(device) if attention_mask_batch is not None else None
-        decision_mask = None # Placeholder for now
-        attention_mask = None # Placeholder for now
-
-
-        with torch.no_grad():
-            # 生成对抗扰动
-            delta = generator(original_features)
-            adversarial_features = original_features + delta
-
-            # 获取 ATN 输出
-            original_atn_outputs = get_atn_outputs(atn_model, original_features)
-            adversarial_atn_outputs = get_atn_outputs(atn_model, adversarial_features)
-
-            # 获取判别器输出
-            # 注意：这里的判别器输出是用于评估，不是训练，所以不需要 Sigmoid/Logits 的特定要求
-            # 但为了保持一致性，使用训练时的 gan_loss_type 对应的输出方式可能更好。
-            # 假设 evaluate_model 直接使用判别器原始输出。
-            D_real_output = discriminator(original_features)
-            D_fake_output = discriminator(adversarial_features)
+    # Initialize perceptual metrics calculator if needed
+    if calculate_perceptual:
+        try:
+            from piq import LPIPS, ssim # type: ignore # Lazy import
+            lpips_metric_eval = LPIPS(net_type='alex', version='0.1').to(device) # Use a separate instance if needed
+            # SSIM does not need explicit initialization like LPIPS
+            piq_available = True
+        except ImportError:
+            print("Warning: piq library not found. Skipping LPIPS and SSIM metrics. Install with 'pip install piq'.")
+            calculate_perceptual = False # Disable perceptual metrics if piq is missing
+        except Exception as e:
+            print(f"Error initializing perceptual metrics (evaluation): {e}. Skipping LPIPS and SSIM.")
+            calculate_perceptual = False
 
 
-            # 1. 攻击成功率
-            if original_atn_outputs.get('decision') is not None and adversarial_atn_outputs.get('decision') is not None:
-                 success_rate_batch = calculate_attack_success_rate(
-                     original_atn_outputs.get('decision'),
-                     adversarial_atn_outputs.get('decision'),
-                     success_threshold=getattr(args, 'eval_success_threshold', 0.1), # 获取评估阈值，提供默认值
-                     success_criterion=getattr(args, 'eval_success_criterion', 'mse_diff_threshold'), # 获取评估标准
-                     topk_k=getattr(args, 'topk_k', 10) # 获取 Top-K 参数
+    with torch.no_grad(): # Ensure no gradients are computed during evaluation
+        num_eval_batches = cfg.evaluation.get('num_eval_batches', len(dataloader)) # Use config if available
+        if num_eval_batches > len(dataloader): num_eval_batches = len(dataloader)
+        if num_eval_batches == 0: # Handle empty dataloader
+             print("Warning: Dataloader is empty during evaluation.")
+             return {
+                'Attack_Success_Rate_Decision': float('nan'),
+                'Attack_Success_Rate_Attention': float('nan'),
+                'Attack_Success_Rate_Feature': float('nan'),
+                'Linf_Norm_Avg': float('nan'),
+                'L2_Norm_Avg': float('nan'),
+                'Discriminator_Real_Score_Avg': float('nan'),
+                'Discriminator_Fake_Score_Avg': float('nan'),
+                'PSNR_Avg': float('nan'),
+                'LPIPS_Avg': float('nan'),
+                'SSIM_Avg': float('nan'),
+            }
+
+        for batch_idx, original_input in enumerate(dataloader):
+            if batch_idx >= num_eval_batches:
+                break
+
+            original_input = original_input.to(device)
+            batch_size = original_input.shape[0]
+            if batch_size == 0: continue
+
+            # Get ATN outputs based on the current stage
+            if current_train_stage == 1:
+                 # Stage 1: Need features for evaluation
+                 original_atn_outputs = get_atn_outputs(
+                     atn_model,
+                     original_input,
+                     return_features=True, # Request features
+                     return_decision=False, # Don't need decision/attention in stage 1 eval
+                     return_attention=False
                  )
-                 total_attack_success_rate += success_rate_batch * batch_size
+                 # In stage 1, adversarial is original + delta, we need adversarial features
+                 # Pass original_input through the generator first to get delta
+                 delta = generator(original_input) if generator is not None else torch.zeros_like(original_input)
+                 # Assuming the generator output is a perturbation delta in the same space as original_input
+                 # And the ATN model takes original_input space data
+                 # We need to pass adversarial_input (original + delta) to ATN to get adversarial features
+                 adversarial_input = torch.clamp(original_input + delta, 0, 1) # Clamp to valid range if applicable
+                 adversarial_atn_outputs = get_atn_outputs(
+                      atn_model,
+                      adversarial_input,
+                      return_features=True,
+                      return_decision=False,
+                      return_attention=False
+                 )
+                 original_features = original_atn_outputs.get('features')
+                 adversarial_features = adversarial_atn_outputs.get('features')
+                 # Decision and Attention maps are None in stage 1 eval
+                 original_decision_map = None
+                 adversarial_decision_map = None
+                 original_attention_map = None
+                 adversarial_attention_map = None
+
+            elif current_train_stage == 2:
+                 # Stage 2: Need decision and attention maps for evaluation
+                 # Still need features if discriminator/GAN eval uses them
+                 # And need original_input and adversarial_input for perturbation norms
+                 delta = generator(original_input) if generator is not None else torch.zeros_like(original_input)
+                 adversarial_input = torch.clamp(original_input + delta, 0, 1)
+
+                 original_atn_outputs = get_atn_outputs(
+                      atn_model,
+                      original_input,
+                      return_features=True, # Needed for GAN eval if applicable
+                      return_decision=True,  # Need decision map in stage 2
+                      return_attention=True # Need attention map in stage 2
+                 )
+                 adversarial_atn_outputs = get_atn_outputs(
+                      atn_model,
+                      adversarial_input,
+                      return_features=True,
+                      return_decision=True,
+                      return_attention=True
+                 )
+                 original_features = original_atn_outputs.get('features')
+                 adversarial_features = adversarial_atn_outputs.get('features')
+                 original_decision_map = original_atn_outputs.get('decision')
+                 adversarial_decision_map = adversarial_atn_outputs.get('decision')
+                 original_attention_map = original_atn_outputs.get('attention')
+                 adversarial_attention_map = adversarial_atn_outputs.get('attention')
+
             else:
-                print("Warning: Decision maps not found for success rate calculation in evaluation batch.")
+                 raise ValueError(f"Unsupported training stage for evaluation: {current_train_stage}")
 
+            # Calculate metrics based on available outputs
 
-            # 2. 扰动范数
-            all_linf_norms.extend(linf_norm(delta).cpu().numpy())
-            all_l2_norms.extend(l2_norm(delta).cpu().numpy())
+            # Attack Success Rate (Feature - only in stage 1 eval relevantly)
+            if current_train_stage == 1 and original_features is not None and adversarial_features is not None:
+                 # Assuming feature attack success means a large MSE difference between features
+                 # success_threshold and success_criterion from cfg.evaluation will be used
+                 success_rate_feature = calculate_attack_success_rate(
+                      original_features.view(batch_size, -1), # Flatten features for criterion compatibility
+                      adversarial_features.view(batch_size, -1), # Flatten features
+                      cfg.evaluation.success_threshold,
+                      success_criterion='mse_diff_threshold', # Feature attack success based on feature difference
+                      higher_is_better_orig=False # For feature difference, higher is better for attack
+                 )
+                 total_attack_success_rate_feature += success_rate_feature * batch_size
 
-            # 3. 感知指标 (PSNR, LPIPS, SSIM)
-            perceptual_metrics_batch = calculate_perceptual_metrics(original_features, adversarial_features, device)
-            if 'psnr' in perceptual_metrics_batch and not np.isnan(perceptual_metrics_batch['psnr']):
-                 all_psnr.append(perceptual_metrics_batch['psnr']) # 记录 PSNR
-            if 'lpips' in perceptual_metrics_batch and not np.isnan(perceptual_metrics_batch['lpips']):
-                all_lpips.append(perceptual_metrics_batch['lpips'])
-            if 'ssim' in perceptual_metrics_batch and not np.isnan(perceptual_metrics_batch['ssim']):
-                 all_ssim.append(perceptual_metrics_batch['ssim'])
+            # Attack Success Rate (Decision Map - only in stage 2 eval relevantly)
+            if current_train_stage == 2 and original_decision_map is not None and adversarial_decision_map is not None:
+                # Assuming ATN decision map is higher is better, goal is to lower it
+                # Use success criterion from cfg.evaluation for decision map
+                success_rate_decision = calculate_attack_success_rate(
+                    original_decision_map,
+                    adversarial_decision_map,
+                    cfg.evaluation.success_threshold,
+                    cfg.evaluation.success_criterion, # Use config criterion for decision map eval
+                    higher_is_better_orig=True # Assuming higher decision value is better for original ATN
+                )
+                total_attack_success_rate_decision += success_rate_decision * batch_size
 
-            # 4. GAN 评估指标
-            # 对于 BCE Loss，输出是概率；对于 LSGAN，输出是 logits。
-            # 直接取均值作为评估指标是合理的。
-            # 展平判别器输出并计算均值
-            avg_D_real += D_real_output.view(batch_size, -1).mean(dim=-1).sum().item() # 累加批次总和
-            avg_D_fake += D_fake_output.view(batch_size, -1).mean(dim=-1).sum().item() # 累加批次总和
+            # Attack Success Rate (Attention Map - only in stage 2 eval relevantly)
+            if current_train_stage == 2 and original_attention_map is not None and adversarial_attention_map is not None:
+                 # Use specific attention success criterion/threshold if available in config
+                 # Otherwise, use the default evaluation criterion/threshold
+                 attention_success_criterion = cfg.evaluation.get('attention_success_criterion', cfg.evaluation.success_criterion)
+                 attention_success_threshold = cfg.evaluation.get('attention_success_threshold', cfg.evaluation.success_threshold)
+                 eval_topk_k = cfg.losses.get('topk_k', 10) # Get topk_k from losses or default
+
+                 success_rate_attention = calculate_attack_success_rate(
+                     original_attention_map,
+                     adversarial_attention_map,
+                     attention_success_threshold,
+                     attention_success_criterion, # Use specific criterion for attention
+                     topk_k=eval_topk_k # Use topk_k for relevant criteria
+                 )
+                 total_attack_success_rate_attention += success_rate_attention * batch_size
+
+            # Perturbation Norms (relevant in both stages)
+            if generator is not None and delta is not None and delta.numel() > 0:
+                # linf_norm and l2_norm expect (B, C, N, H, W) or similar. delta should be in this format.
+                if delta.ndim == 5:
+                     total_linf_norm += linf_norm(delta).mean().item() * batch_size # mean over batch, sum over batches
+                     total_l2_norm += l2_norm(delta).mean().item() * batch_size
+                else:
+                     print(f"Warning: Delta tensor for norm calculation is not 5D ({delta.ndim}D).")
+
+            # GAN Evaluation Metrics (relevant in both stages if discriminator is used)
+            if discriminator is not None and original_features is not None and adversarial_features is not None:
+                 # Ensure features are suitable for discriminator (e.g., correct shape and values)
+                 # Assuming discriminator input is features from ATN feature head (B, C_feat, N, W_feat, H_feat)
+                 # Need to ensure original_features and adversarial_features from get_atn_outputs are in this format
+                 try:
+                     D_real_output = discriminator(original_features.detach())
+                     D_fake_output = discriminator(adversarial_features.detach())
+
+                     # Discriminator output shape is typically (B, 1) or (B, 1, patch_N, patch_H, patch_W)
+                     # Flatten all dimensions except batch and take mean per sample, then sum over batch
+                     avg_D_real_score += D_real_output.view(batch_size, -1).mean(dim=-1).sum().item()
+                     avg_D_fake_score += D_fake_output.view(batch_size, -1).mean(dim=-1).sum().item()
+                 except Exception as e:
+                     print(f"Warning: Error calculating GAN evaluation metrics: {e}. Skipping for this batch.")
+
+            # Perceptual Metrics (relevant if input is image and calculate_perceptual is True)
+            # These should ideally be calculated on the original input space, not feature space
+            # If the generator takes image input and outputs image perturbation, use original_input and adversarial_input
+            # If the generator takes feature input and outputs feature perturbation, these metrics on features may not be meaningful
+            # Assuming generator takes image-like input (3 channels) when calculate_perceptual is True
+            if calculate_perceptual and original_input.shape[1] == 3:
+                 try:
+                     # Assuming original_input and adversarial_input are (B, C, T, H, W) image data
+                     # Select a specific frame (e.g., the first one) for 2D perceptual comparison
+                     original_frame_eval = original_input[:, :, cfg.logging.sequence_step_to_vis, :, :].squeeze(2) # (B, C, H, W)
+                     adversarial_frame_eval = adversarial_input[:, :, cfg.logging.sequence_step_to_vis, :, :].squeeze(2) # (B, C, H, W)
+
+                     # PSNR
+                     psnr_vals_batch = calculate_psnr(original_frame_eval, adversarial_frame_eval, data_range=1.0) # data_range=1.0 if normalized [0,1]
+                     all_psnr.extend(psnr_vals_batch.cpu().numpy().tolist())
+
+                     # LPIPS and SSIM (if piq available)
+                     if 'lpips_metric_eval' in locals(): # Check if piq and metric were initialized
+                          # LPIPS expects [-1, 1], SSIM expects [0, 1]
+                          lpips_val_batch = lpips_metric_eval(original_frame_eval * 2 - 1, adversarial_frame_eval * 2 - 1).mean().item()
+                          all_lpips.append(lpips_val_batch)
+                          ssim_val_batch = ssim(original_frame_eval, adversarial_frame_eval, data_range=1.0, reduction='mean').item()
+                          all_ssim.append(ssim_val_batch)
+
+                 except Exception as e:
+                      print(f"Warning: Error calculating perceptual metrics for this batch: {e}. Skipping.")
 
             total_samples += batch_size
 
-    avg_attack_success_rate = total_attack_success_rate / total_samples if total_samples > 0 else 0.0
-    avg_linf_norm = np.mean(all_linf_norms) if all_linf_norms else 0.0
-    avg_l2_norm = np.mean(all_l2_norms) if all_l2_norms else 0.0
-    avg_psnr = np.mean(all_psnr) if all_psnr else float('nan') # 计算 PSNR 平均值
-    avg_lpips = np.mean(all_lpips) if all_lpips else float('nan')
-    avg_ssim = np.mean(all_ssim) if all_ssim else float('nan')
-    avg_D_real = avg_D_real / total_samples if total_samples > 0 else 0.0
-    avg_D_fake = avg_D_fake / total_samples if total_samples > 0 else 0.0
+    # Calculate overall averages
+    # Only report relevant attack success rates based on the stage
+    avg_attack_success_rate_feature = total_attack_success_rate_feature / total_samples if total_samples > 0 else float('nan')
+    avg_attack_success_rate_decision = total_attack_success_rate_decision / total_samples if total_samples > 0 else float('nan')
+    avg_attack_success_rate_attention = total_attack_success_rate_attention / total_samples if total_samples > 0 else float('nan')
 
+    avg_linf_norm = total_linf_norm / total_samples if total_samples > 0 else float('nan')
+    avg_l2_norm = total_l2_norm / total_samples if total_samples > 0 else float('nan')
 
-    print(f"\nEvaluation Results ({total_samples} samples):")
-    print(f"  Avg. Attack Success Rate: {avg_attack_success_rate:.4f}")
-    print(f"  Avg. L-inf Norm: {avg_linf_norm:.4f}")
-    print(f"  Avg. L2 Norm: {avg_l2_norm:.4f}")
-    print(f"  Avg. PSNR: {avg_psnr:.4f}") # 打印 PSNR
-    print(f"  Avg. LPIPS: {avg_lpips:.4f}")
-    print(f"  Avg. SSIM: {avg_ssim:.4f}")
-    print(f"  Avg. Discriminator Real Output: {avg_D_real:.4f}") # 记录判别器对真实样本的平均输出
-    print(f"  Avg. Discriminator Fake Output: {avg_D_fake:.4f}") # 记录判别器对伪造样本的平均输出
+    avg_D_real_score = avg_D_real_score / total_samples if total_samples > 0 else float('nan')
+    avg_D_fake_score = avg_D_fake_score / total_samples if total_samples > 0 else float('nan')
 
+    # Handle cases where perceptual metrics lists might be empty or full of NaNs
+    avg_psnr = np.nanmean(all_psnr) if all_psnr else float('nan') # nanmean ignores NaNs
+    avg_lpips = np.nanmean(all_lpips) if all_lpips else float('nan')
+    avg_ssim = np.nanmean(all_ssim) if all_ssim else float('nan')
 
-    results = {
-        "avg_attack_success_rate": avg_attack_success_rate,
-        "avg_linf_norm": avg_linf_norm,
-        "avg_l2_norm": avg_l2_norm,
-        "avg_psnr": avg_psnr, # 添加 PSNR 到结果字典
-        "avg_lpips": avg_lpips,
-        "avg_ssim": avg_ssim,
-        "avg_D_real": avg_D_real, # 添加到结果字典
-        "avg_D_fake": avg_D_fake # 添加到结果字典
+    # Collect results in a dictionary
+    metrics = {
+        f'Attack_Success_Rate_Decision_Stage{current_train_stage}': avg_attack_success_rate_decision if current_train_stage == 2 else float('nan'),
+        f'Attack_Success_Rate_Attention_Stage{current_train_stage}': avg_attack_success_rate_attention if current_train_stage == 2 else float('nan'),
+        f'Attack_Success_Rate_Feature_Stage{current_train_stage}': avg_attack_success_rate_feature if current_train_stage == 1 else float('nan'), # Report feature success rate for stage 1
+        'Linf_Norm_Avg': avg_linf_norm,
+        'L2_Norm_Avg': avg_l2_norm,
+        'Discriminator_Real_Score_Avg': avg_D_real_score,
+        'Discriminator_Fake_Score_Avg': avg_D_fake_score,
+        'PSNR_Avg': avg_psnr if calculate_perceptual else float('nan'),
+        'LPIPS_Avg': avg_lpips if calculate_perceptual else float('nan'),
+        'SSIM_Avg': avg_ssim if calculate_perceptual else float('nan'),
     }
-    return results
 
-# 在 train.py 中, 你可以添加一个评估阶段:
-# parser.add_argument('--eval_interval', type=int, default=5, help='how many epochs to wait before evaluating')
-# parser.add_argument('--eval_success_threshold', type=float, default=0.1, help='threshold for attack success in evaluation')
-# parser.add_argument('--eval_success_criterion', type=str, default='mse_diff_threshold', help='criterion for attack success in evaluation')
-# parser.add_argument('--eval_topk_k', type=int, default=10, help='K value for Top-K attack success criterion in evaluation') # 添加评估 Top-K 参数
-# ...
-# if (epoch + 1) % args.eval_interval == 0:
-#     print(f"\nEvaluating model at epoch {epoch + 1}...")
-#     # 假设你有一个 eval_dataloader
-#     # eval_dataloader = create_real_dataloader(...) # 或者 create_mock_dataloader(...)
-#     # eval_results = evaluate_model(generator, discriminator, atn_model, eval_dataloader, device, args) # 将 args 传入评估函数
-#     # for key, value in eval_results.items():
-#     #     writer.add_scalar(f'Evaluation/{key}', value, epoch + 1)
-#     # generator.train() # Switch back to training mode
-#     # discriminator.train() # Switch back to training mode
-#     print("Evaluation placeholder executed in eval_utils.") 
+    generator.train() # Set models back to training mode
+    discriminator.train() # Discriminator should also be in train mode usually
+    # atn_model.eval() # ATN model stays in eval mode during training
+
+    return metrics

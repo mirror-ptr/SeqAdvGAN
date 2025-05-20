@@ -1,0 +1,76 @@
+# configs/default_config.yaml
+
+# 全局默认配置
+data:
+  video_path: "data/videos/default_video.mp4"
+  level_json_path: "resources/level/default_level.json"
+  sequence_length: 16
+  channels: 128 # 默认使用ATN特征通道
+  height: 64
+  width: 64
+  num_workers: 0 # DataLoader workers
+
+model:
+  generator:
+    in_channels: 128 # generator input/output channels should match ATN feature size
+    out_channels: 128
+    epsilon: 0.03
+    num_bottlenecks: 4
+    base_channels: 32
+  discriminator:
+    type: "cnn" # default is cnn
+    base_channels: 64
+  atn:
+    model_path: "path/to/atn_model" # Default ATN model path - MUST BE SPECIFIED
+    atn_height: 64 # ATN expected input height
+    atn_width: 64 # ATN expected input width
+    atn_sequence_length: 16 # ATN expected input sequence length
+    atn_num_heads: 4 # ATN attention head count (for mask simulation/vis)
+
+training:
+  batch_size: 4
+  num_epochs: 100
+  lr_g: 0.0002
+  lr_d: 0.0002
+  b1: 0.5
+  b2: 0.999
+  seed: 42
+  device: "cuda"
+
+losses:
+  gan_type: "bce" # bce or lsgan
+  decision_loss_type: "mse" # mse, l1, kl, js (decision map, usually mse/l1)
+  attention_loss_type: "mse" # mse, l1, kl, js, topk
+  decision_loss_weight: 1.0
+  attention_loss_weight: 1.0
+  topk_k: 10 # for Top-K attention loss / evaluation criterion
+
+regularization:
+  lambda_l_inf: 1.0 # Note: epsilon already enforces L-inf
+  lambda_l2: 1.0
+  lambda_tv: 0.0
+  lambda_l2_penalty: 0.001 # L2 penalty on generator weights, not delta norm
+
+mask:
+  use_region_mask: False
+  # decision_mask_path: "resources/masks/decision_mask.png"
+  # attention_mask_path: "resources/masks/attention_mask.npy"
+
+logging:
+  log_dir: "runs/default_train"
+  checkpoint_dir: "checkpoints/default_train"
+  log_interval: 10
+  vis_interval: 50
+  save_interval: 10
+
+evaluation:
+  eval_interval: 5
+  success_threshold: 0.1
+  success_criterion: "mse_diff_threshold" # mse_diff_threshold, mean_change_threshold, topk_value_drop, topk_position_change
+  # topk_k for evaluation success criterion comes from losses.topk_k
+
+# Visualization parameters (can be separate or part of logging/evaluation)
+visualization:
+  num_vis_samples: 4
+  sequence_step_to_vis: 0 # 0-indexed
+  num_vis_heads: 1 # for attention visualization

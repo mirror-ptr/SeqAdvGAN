@@ -12,7 +12,7 @@ class Generator(nn.Module):
         self.epsilon = epsilon
 
         # 通道数：for ATN
-        assert in_channels == 128 and out_channels == 128
+        # assert in_channels == 128 and out_channels == 128
 
         # Encoder
         self.encoder = nn.Sequential(
