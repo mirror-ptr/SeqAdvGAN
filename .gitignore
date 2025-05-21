@@ -261,6 +261,9 @@ saved_models/
 # Log files
 logs/
 runs/
+doc/
+
+test/
 
 # Datasets - Often too large to commit
 data/

@@ -17,7 +17,7 @@ model:
   generator:
     in_channels: 128
     out_channels: 128
-    epsilon: 0.03
+    epsilon: 0.2
     num_bottlenecks: 4
     base_channels: 32
   discriminator:
@@ -36,9 +36,9 @@ model:
 # 训练配置
 training:
   train_stage: 1 # 新增参数：当前训练阶段，1 代表初步特征攻击
-  batch_size: 20
-  num_epochs: 50 # 阶段一的 epoch 数量
-  lr_g: 0.0002
+  batch_size: 50
+  num_epochs: 10 # 阶段一的 epoch 数量
+  lr_g: 0.001
   lr_d: 0.0002
   b1: 0.5
   b2: 0.999
@@ -46,7 +46,7 @@ training:
   device: "cuda"
   generator_weights_path: null # 如果从预训练模型开始，指定路径
   discriminator_weights_path: null # 如果从预训练模型开始，指定路径
-  resume_checkpoint: null # 新增：继续训练的检查点路径
+  resume_checkpoint: checkpoints/stage1/checkpoint_epoch_5_stage_1.pth # 继续训练的检查点路径
   eval_interval: 5 # 每 5 个 epoch 评估一次
   eval_success_threshold: 0.1 # 评估成功阈值
   eval_success_criterion: 'mse_diff_threshold' # 评估成功标准
@@ -58,15 +58,16 @@ losses:
   # 或者将 decision_loss_type 用于特征层攻击， attention_loss_type 暂时不用
   decision_loss_type: "mse" # 用于特征层攻击时也是最大化 MSE
   attention_loss_type: "none" # 阶段一不使用注意力损失，设置为 'none'
-  decision_loss_weight: 1.0 # 阶段一用于特征层攻击
+  decision_loss_weight: 10.0 # 阶段一用于特征层攻击
   attention_loss_weight: 0.0 # 阶段一禁用注意力损失
   topk_k: 10 # 用于 Top-K 注意力损失 / 评估标准
+  gan_loss_weight: 0.01 # 用于降低 loss_G_gan 的权重：如果 Generator 的 GAN 损失下降过快，可能表明 Generator 正在牺牲攻击性来欺骗 Discriminator。
 
 # 正则化配置
 regularization:
   lambda_l_inf: 1.0 # Note: epsilon already enforces L-inf
-  lambda_l2: 0.001
-  lambda_tv: 0.0001
+  lambda_l2: 0.0
+  lambda_tv: 0.0
   lambda_l2_penalty: 0.001
 
 # 掩码配置 (如果你的 ATN 有区域掩码)
