@@ -183,7 +183,7 @@ def train(cfg):
         checkpoint_path = cfg.training.resume_checkpoint
         if os.path.exists(checkpoint_path):
             print(f"Loading checkpoint from {checkpoint_path}")
-            checkpoint = torch.load(checkpoint_path, map_location=device)
+            checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
             generator.load_state_dict(checkpoint['generator_state_dict'])
             discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
             optimizer_G.load_state_dict(checkpoint['optimizer_G_state_dict'])
@@ -318,7 +318,12 @@ def train(cfg):
 
 
             # Total Generator loss
-            loss_G = loss_G_gan + loss_G_attack + loss_G_reg_l2 + loss_G_reg_tv
+            # Read gan_loss_weight from config
+            gan_loss_weight = cfg.losses.get('gan_loss_weight', 1.0) # Default to 1.0 if not in config
+            print(f"Debug: Epoch {epoch}, Batch {i} - Using gan_loss_weight: {gan_loss_weight}") # Debug print
+
+            # Use the gan_loss_weight in total loss calculation
+            loss_G = gan_loss_weight * loss_G_gan + loss_G_attack + loss_G_reg_l2 + loss_G_reg_tv
             print(f"Debug: Epoch {epoch}, Batch {i} - Calculated total loss_G: {loss_G.item():.4f}")
 
             loss_G.backward()
@@ -370,26 +375,30 @@ def train(cfg):
             if global_step % cfg.logging.vis_interval == 0:
                  print(f"Debug: Epoch {epoch}, Batch {i} - Visualizing samples...")
                  # Visualize samples and outputs
-                 # Pass original image, feature delta, and adversarial features
-                 # visualize_samples_and_outputs function needs to handle these different inputs
-        visualize_samples_and_outputs(
+                 # Pass original image, original features, feature delta, and adversarial features
+                 print(f"Debug: visualize_samples_and_outputs inputs - real_x shape: {real_x.shape}, numel: {real_x.numel()}") # Debug print
+                 print(f"Debug: visualize_samples_and_outputs inputs - original_features shape: {original_features.shape if original_features is not None else 'None'}, numel: {original_features.numel() if original_features is not None else 0}") # Debug print
+                 print(f"Debug: visualize_samples_and_outputs inputs - delta shape: {delta.shape}, numel: {delta.numel()}") # Debug print
+                 print(f"Debug: visualize_samples_and_outputs inputs - adversarial_features shape: {adversarial_features.shape}, numel: {adversarial_features.numel()}") # Debug print
+                 visualize_samples_and_outputs(
                              writer,
-                     real_x.detach().cpu(), # Original image (B, C, T, H, W) - Detach and move to CPU for visualization
-                     delta.detach().cpu(), # Feature perturbation (B, 128, N_feat, W_feat, H_feat) - Detach and move to CPU
-                     adversarial_features.detach().cpu(), # Adversarial features (B, 128, N_feat, W_feat, H_feat) - Detach and move to CPU
-                     None, # Original decision map (None in Stage 1)
-                     None, # Adversarial decision map (None in Stage 1)
+                     real_x.detach().cpu(),         # original_image
+                     original_features.detach().cpu(), # <-- Pass original_features here
+                     delta.detach().cpu(),          # feature_delta
+                     adversarial_features.detach().cpu(), # adversarial_features
+                     None,                          # original_decision_map
+                     None,                          # adversarial_decision_map
                      global_step,
                      num_samples=cfg.logging.num_vis_samples,
                      sequence_step_to_vis=cfg.logging.sequence_step_to_vis
                  )
-    print(f"Debug: Epoch {epoch}, Batch {i} - Sample visualization completed.")
+                 print(f"Debug: Epoch {epoch}, Batch {i} - Sample visualization completed.")
 
                  # Visualize attention maps (None in Stage 1)
                  # The visualize_attention_maps function should already handle train_stage == 2 internally
                  # It will check if attention tensors are None.
-    print(f"Debug: Epoch {epoch}, Batch {i} - Visualizing attention maps (if available)...")
-    visualize_attention_maps(
+                 print(f"Debug: Epoch {epoch}, Batch {i} - Visualizing attention maps (if available)...")
+                 visualize_attention_maps(
                             writer,
                      None, # Original attention matrix (None in Stage 1)
                      None, # Adversarial attention matrix (None in Stage 1)
@@ -397,53 +406,54 @@ def train(cfg):
                      num_samples=cfg.logging.num_vis_samples,
                      num_heads_to_vis=cfg.logging.num_vis_heads
                       )
-    print(f"Debug: Epoch {epoch}, Batch {i} - Attention map visualization completed.")
+                 print(f"Debug: Epoch {epoch}, Batch {i} - Attention map visualization completed.")
 
 
-    global_step += 1
-    print(f"Debug: Epoch {epoch}, Batch {i} - Batch processing completed. Global step: {global_step}")
+            global_step += 1
+            print(f"DEBUG_STEP_CHECK: global_step is now {global_step}") # Add this line
+            print(f"Debug: Epoch {epoch}, Batch {i} - Batch processing completed. Global step: {global_step}")
 
         # End of Epoch Evaluation and Checkpoint Saving
-    print(f"Debug: Epoch {epoch} - End of epoch, checking evaluation and checkpoint intervals.")
-    if (epoch + 1) % cfg.training.eval_interval == 0:
-            print(f"\nEvaluating at end of epoch {epoch+1}...")
-            # Evaluation logic might need adjustment for Stage 1
-            # evaluate_model expects original_atn_outputs, adversarial_atn_outputs
-            # In stage 1, these will only contain 'features'
-            # eval_utils needs to handle evaluation based only on features for Stage 1
-            eval_results = evaluate_model(
-                generator,
-                discriminator,
-                atn_model, # Pass ATN model to get features during evaluation
-                dataloader, # Use training dataloader for simplicity in eval_utils example, use a separate eval_dataloader in practice
-                device,
-                cfg,
-                current_train_stage=cfg.training.train_stage
-            )
-            print("--- Evaluation Results ---")
-            for metric_name, value in eval_results.items():
-                 writer.add_scalar(f'Evaluation/{metric_name}', value, global_step)
-                 print(f"  {metric_name}: {value:.4f}")
-            print("------------------------")
+        print(f"Debug: Epoch {epoch} - End of epoch, checking evaluation and checkpoint intervals.")
+        if (epoch + 1) % cfg.training.eval_interval == 0:
+                print(f"\nEvaluating at end of epoch {epoch+1}...")
+                # Evaluation logic might need adjustment for Stage 1
+                # evaluate_model expects original_atn_outputs, adversarial_atn_outputs
+                # In stage 1, these will only contain 'features'
+                # eval_utils needs to handle evaluation based only on features for Stage 1
+                eval_results = evaluate_model(
+                    generator,
+                    discriminator,
+                    atn_model, # Pass ATN model to get features during evaluation
+                    dataloader, # Use training dataloader for simplicity in eval_utils example, use a separate eval_dataloader in practice
+                    device,
+                    cfg,
+                    current_train_stage=cfg.training.train_stage
+                )
+                print("--- Evaluation Results ---")
+                for metric_name, value in eval_results.items():
+                     writer.add_scalar(f'Evaluation/{metric_name}', value, global_step)
+                     print(f"  {metric_name}: {value:.4f}")
+                print("------------------------")
 
 
         # Save checkpoint
-    if (epoch + 1) % cfg.training.checkpoint_interval == 0 or (epoch + 1) == cfg.training.num_epochs:
-            print(f"Debug: Epoch {epoch} - Saving checkpoint...")
-            checkpoint_dir = cfg.logging.checkpoint_dir
-            os.makedirs(checkpoint_dir, exist_ok=True)
-            checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_epoch_{epoch+1}_stage_{cfg.training.train_stage}.pth')
-            print(f"Saving checkpoint to {checkpoint_path}")
-            torch.save({
-                'epoch': epoch,
-                'global_step': global_step,
-                'generator_state_dict': generator.state_dict(),
-                'discriminator_state_dict': discriminator.state_dict(),
-                'optimizer_G_state_dict': optimizer_G.state_dict(),
-                'optimizer_D_state_dict': optimizer_D.state_dict(),
-                'cfg': dict(cfg)
-            }, checkpoint_path)
-            print(f"Debug: Epoch {epoch} - Checkpoint saved.")
+        if (epoch + 1) % cfg.logging.save_interval == 0 or (epoch + 1) == cfg.training.num_epochs:
+                print(f"Debug: Epoch {epoch} - Saving checkpoint...")
+                checkpoint_dir = cfg.logging.checkpoint_dir
+                os.makedirs(checkpoint_dir, exist_ok=True)
+                checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_epoch_{epoch+1}_stage_{cfg.training.train_stage}.pth')
+                print(f"Saving checkpoint to {checkpoint_path}")
+                torch.save({
+                    'epoch': epoch,
+                    'global_step': global_step,
+                    'generator_state_dict': generator.state_dict(),
+                    'discriminator_state_dict': discriminator.state_dict(),
+                    'optimizer_G_state_dict': optimizer_G.state_dict(),
+                    'optimizer_D_state_dict': optimizer_D.state_dict(),
+                    'cfg': dict(cfg)
+                }, checkpoint_path)
+                print(f"Debug: Epoch {epoch} - Checkpoint saved.")
 
     writer.close()
     print("Training finished.")

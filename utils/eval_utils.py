@@ -412,7 +412,8 @@ def calculate_perceptual_metrics(original_features: torch.Tensor,
             # So, providing [0,1] should be fine.
             if original_img_perceptual.shape[1] == 3:
                  # Ensure LPIPS metric is on the correct device
-                 lpips_metric = LPIPS(net_type='alex', version='0.1').to(device) # Re-initialize or move
+                 # LPIPS metric initialization compatible with piq 0.8.0
+                 lpips_metric = LPIPS(network='alex').to(device) # Re-initialize or move
                  # lpips_metric expects tensors on the same device
                  lpips_val = lpips_metric(original_img_perceptual * 2 - 1, adversarial_img_perceptual * 2 - 1).mean().item() # Map [0,1] to [-1,1]
                  metrics['lpips'] = lpips_val
@@ -480,7 +481,8 @@ def evaluate_model(generator, discriminator, atn_model, dataloader, device, cfg,
     if calculate_perceptual:
         try:
             from piq import LPIPS, ssim # type: ignore # Lazy import
-            lpips_metric_eval = LPIPS(net_type='alex', version='0.1').to(device) # Use a separate instance if needed
+            # LPIPS metric initialization compatible with piq 0.8.0
+            lpips_metric_eval = LPIPS(network='alex').to(device) # Use a separate instance if needed
             # SSIM does not need explicit initialization like LPIPS
             piq_available = True
         except ImportError:
@@ -517,55 +519,64 @@ def evaluate_model(generator, discriminator, atn_model, dataloader, device, cfg,
             batch_size = original_input.shape[0]
             if batch_size == 0: continue
 
-            # Get ATN outputs based on the current stage
-            if current_train_stage == 1:
-                 # Stage 1: Need features for evaluation
-                 original_atn_outputs = get_atn_outputs(
-                     atn_model,
-                     original_input,
-                     return_features=True, # Request features
-                     return_decision=False, # Don't need decision/attention in stage 1 eval
-                     return_attention=False
-                 )
-                 # In stage 1, adversarial is original + delta, we need adversarial features
-                 # Pass original_input through the generator first to get delta
-                 delta = generator(original_input) if generator is not None else torch.zeros_like(original_input)
-                 # Assuming the generator output is a perturbation delta in the same space as original_input
-                 # And the ATN model takes original_input space data
-                 # We need to pass adversarial_input (original + delta) to ATN to get adversarial features
-                 adversarial_input = torch.clamp(original_input + delta, 0, 1) # Clamp to valid range if applicable
-                 adversarial_atn_outputs = get_atn_outputs(
-                      atn_model,
-                      adversarial_input,
-                      return_features=True,
-                      return_decision=False,
-                      return_attention=False
-                 )
-                 original_features = original_atn_outputs.get('features')
-                 adversarial_features = adversarial_atn_outputs.get('features')
-                 # Decision and Attention maps are None in stage 1 eval
-                 original_decision_map = None
-                 adversarial_decision_map = None
-                 original_attention_map = None
-                 adversarial_attention_map = None
+            # Pass original_input through ATN to get features before passing to generator
+            if atn_model is not None:
+                with torch.no_grad():
+                    original_atn_outputs = get_atn_outputs(
+                        atn_model,
+                        original_input, # Pass original image data
+                        return_features=True,
+                        return_decision=False,
+                        return_attention=False
+                    )
+                original_features = original_atn_outputs.get('features')
+                if original_features is None or original_features.numel() == 0:
+                    print("Error: ATN model returned None or empty features during evaluation. Cannot proceed.")
+                    return {}
+            else:
+                print("Error: ATN model is None during evaluation. Cannot get features.")
+                return {}
+
+            # Generator takes features as input in Stage 1
+            delta = generator(original_features) if generator is not None else torch.zeros_like(original_features) # delta is feature perturbation in Stage 1
+
+            # Apply perturbation in feature space for Stage 1
+            if cfg.training.train_stage == 1:
+                # 1. Get original features from ATN (ATN takes original image data) - This is done BEFORE the if/else block
+                # 2. Generator generates delta in the feature space - This is done BEFORE the if/else block
+                # 3. Calculate adversarial features
+                adversarial_features = original_features + delta # Keep this line
+
+                # Decision and Attention maps are None in stage 1 eval, as generator perturbs features directly.
+                # We don't pass adversarial features back through ATN to get decision/attention maps.
+                original_decision_map = None
+                adversarial_decision_map = None
+                original_attention_map = None
+                adversarial_attention_map = None
+
+                # We might still need adversarial_input for perturbation norms if delta is defined relative to it,
+                # but delta is defined on features in Stage 1.
+                # Perturbation norms should be calculated on delta itself (which is in feature space).
+                # The `delta` variable calculated before this if/else block is the feature perturbation.
+                # Let's ensure `delta` is available and used for norms.
 
             elif current_train_stage == 2:
                  # Stage 2: Need decision and attention maps for evaluation
-                 # Still need features if discriminator/GAN eval uses them
-                 # And need original_input and adversarial_input for perturbation norms
+                 # Generator outputs perturbation in IMAGE space
                  delta = generator(original_input) if generator is not None else torch.zeros_like(original_input)
-                 adversarial_input = torch.clamp(original_input + delta, 0, 1)
+                 adversarial_input = torch.clamp(original_input + delta, 0, 1) # Adversarial input is in IMAGE space
 
+                 # Get ATN outputs for original and adversarial images
                  original_atn_outputs = get_atn_outputs(
                       atn_model,
-                      original_input,
-                      return_features=True, # Needed for GAN eval if applicable
-                      return_decision=True,  # Need decision map in stage 2
-                      return_attention=True # Need attention map in stage 2
+                      original_input, # Pass original image
+                      return_features=True,
+                      return_decision=True,
+                      return_attention=True
                  )
                  adversarial_atn_outputs = get_atn_outputs(
                       atn_model,
-                      adversarial_input,
+                      adversarial_input, # Pass adversarial image
                       return_features=True,
                       return_decision=True,
                       return_attention=True
@@ -583,6 +594,8 @@ def evaluate_model(generator, discriminator, atn_model, dataloader, device, cfg,
             # Calculate metrics based on available outputs
 
             # Attack Success Rate (Feature - only in stage 1 eval relevantly)
+            # This calculation needs original_features (from the first get_atn_outputs call before the if/else)
+            # and adversarial_features (calculated as original_features + delta within the stage 1 block).
             if current_train_stage == 1 and original_features is not None and adversarial_features is not None:
                  # Assuming feature attack success means a large MSE difference between features
                  # success_threshold and success_criterion from cfg.evaluation will be used
@@ -594,6 +607,7 @@ def evaluate_model(generator, discriminator, atn_model, dataloader, device, cfg,
                       higher_is_better_orig=False # For feature difference, higher is better for attack
                  )
                  total_attack_success_rate_feature += success_rate_feature * batch_size
+            # Decision and Attention success rates are calculated ONLY if current_train_stage == 2
 
             # Attack Success Rate (Decision Map - only in stage 2 eval relevantly)
             if current_train_stage == 2 and original_decision_map is not None and adversarial_decision_map is not None:
