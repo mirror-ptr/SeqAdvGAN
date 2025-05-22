@@ -43,7 +43,7 @@ class PatchDiscriminator3d(nn.Module):
         # 注意：PatchGAN 通常在损失函数中直接使用原始输出 (logits)，而不是在这里加 Sigmoid。
         # 但为了与 gan_losses.py 中的 BCELoss 兼容，暂时在这里添加 Sigmoid。
         # 如果后面切换到 BCEWithLogitsLoss，可以移除 Sigmoid。
-        self.sigmoid = nn.Sigmoid()
+        # self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
         # x shape: (B, C, N, H, W)
@@ -56,10 +56,7 @@ class PatchDiscriminator3d(nn.Module):
         # 空间和序列维度会根据卷积参数变化
         patch_output = self.output_layer(out)
 
-        # 应用 Sigmoid 得到概率值 (B, 1, patch_N, patch_H, patch_W)
-        prediction = self.sigmoid(patch_output)
-
-        return prediction
+        return patch_output
 
 # 示例用法:
 # discriminator_patch = PatchDiscriminator3d(in_channels=128)
