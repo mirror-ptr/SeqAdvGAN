@@ -37,6 +37,21 @@ training:
   seed: 42
   device: "cuda"
 
+  # training/dynamic_gan_balance: GAN 动态平衡策略配置
+  dynamic_gan_balance:
+    enabled: False          # 是否启用动态平衡策略
+    strategy: "loss_ratio_freq_adjust" # 平衡策略：'loss_ratio_freq_adjust' (基于损失比调整频率),
+                                        # 'adaptive_lr' (自适应学习率调整), 'none' (不启用)
+    freq_adjust_interval: 100 # 每隔多少个训练步数调整一次频率/学习率
+    initial_D_freq: 1      # 判别器初始更新频率（每 D_freq 步更新一次 D）
+    initial_G_freq: 1      # 生成器初始更新频率
+    D_dominant_threshold: 2.0 # 当 D_loss / G_loss_gan > 此阈值时，认为 D 过强
+    G_dominant_threshold: 0.5 # 当 D_loss / G_loss_gan < 此阈值时，认为 G 过强
+    lr_adjust_factor: 0.9  # 学习率调整的乘数 (例如，0.9表示降低10%)
+    min_lr: 1e-6           # 最小学习率
+    max_lr: 1e-3           # 最大学习率
+    loss_history_window: 50 # 用于计算平均损失的滑动窗口大小
+
 losses:
   gan_type: "bce" # bce or lsgan
   decision_loss_type: "mse" # mse, l1, kl, js (decision map, usually mse/l1)
