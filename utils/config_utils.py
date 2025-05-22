@@ -2,7 +2,7 @@ import yaml
 import argparse
 import os
 from easydict import EasyDict as edict
-from typing import Any # 导入 Any 用于表示任意类型
+from typing import Any, Optional # 导入 Any 用于表示任意类型，Optional 用于可选类型
 
 def load_config(config_path: str) -> edict:
     """
@@ -51,7 +51,7 @@ def merge_configs(base: edict, new: edict) -> edict:
             base[k] = v
     return base
 
-def parse_args_and_config(default_config_path: str, task_config_arg: str = 'config') -> edict | None:
+def parse_args_and_config(default_config_path: str, task_config_arg: str = 'config') -> Optional[edict]:
     """
     解析命令行参数并加载/合并配置。
     合并优先级：命令行参数 > 特定任务配置文件 > 默认配置文件。
@@ -64,7 +64,7 @@ def parse_args_and_config(default_config_path: str, task_config_arg: str = 'conf
         task_config_arg (str): 用于指定特定任务配置文件的命令行参数名称 (例如 'config')。
 
     Returns:
-        edict | None: 加载并合并后的配置对象，如果加载默认配置失败则返回 None。
+        Optional[edict]: 加载并合并后的配置对象，如果加载默认配置失败则返回 None。
     """
     # 1. 创建临时的 ArgumentParser，只用于解析特定任务配置文件的路径
     parser = argparse.ArgumentParser(description='SeqAdvGAN Script')

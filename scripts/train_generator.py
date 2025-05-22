@@ -246,7 +246,8 @@ def train(cfg: Any) -> None: # 使用 Any 类型提示 cfg，因为它通常是 
             sequence_length=cfg.data.sequence_length, # 每个样本的序列长度 (帧数)
             transform=None, # TODO: 在这里添加数据增强或预处理变换
             target_height=cfg.data.height, # 视频帧的目标高度
-            target_width=cfg.data.width # 视频帧的目标宽度
+            target_width=cfg.data.width, # 视频帧的目标宽度
+            device=device # Pass the determined device
         )
         # 使用 DataLoader 包装数据集，并配置相关参数。
         # worker_init_fn 用于确保多进程数据加载时的随机性。
@@ -257,7 +258,8 @@ def train(cfg: Any) -> None: # 使用 Any 类型提示 cfg，因为它通常是 
             shuffle=True, # 在每个 epoch 开始时打乱数据
             num_workers=cfg.data.num_workers, # 数据加载器工作进程数
             worker_init_fn=worker_init_fn, # 工作进程初始化函数
-            pin_memory=True # 启用锁页内存
+            pin_memory=True, # 启用锁页内存
+            multiprocessing_context='spawn' # 使用 'spawn' 启动方法以兼容 CUDA 和多进程
         )
 
     print(f"Data loaded. Number of batches per epoch: {len(dataloader)}")
@@ -265,7 +267,7 @@ def train(cfg: Any) -> None: # 使用 Any 类型提示 cfg，因为它通常是 
     # --- TensorBoard Logging Setup ---
     # 创建 SummaryWriter 对象，用于将训练过程中的标量、图像等写入 TensorBoard 日志文件。
     # 日志目录根据配置 cfg.logging.log_dir 和当前训练阶段 train_stage 确定。
-    log_dir = os.path.join(cfg.logging.log_dir, f'stage{cfg.training.train_stage}_train') # 日志保存目录，区分训练阶段
+    log_dir = cfg.logging.log_dir # 直接使用配置文件中的日志目录
     writer = SummaryWriter(log_dir)
     print(f"TensorBoard logs will be saved to: {log_dir}")
 

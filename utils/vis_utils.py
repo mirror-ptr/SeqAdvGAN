@@ -127,9 +127,13 @@ def feature_to_visualizable(features: Optional[torch.Tensor], sequence_step: int
             visualizable_features = torch.cat([visualizable_features, visualizable_features[:, :1, :, :]], dim=1) # (B, 3, H, W)
         # 如果子集通道数 > 3，只取前三个通道进行 RGB 可视化
         elif visualizable_features.shape[1] > 3:
-            # 警告：通道子集有 {} 个通道。只取前 3 个用于可视化 (作为 RGB)。
-            print(f"Warning: Channel subset has {visualizable_features.shape[1]} channels. Taking the first 3 for visualization (as RGB).")
-            visualizable_features = visualizable_features[:, :3, :, :] # (B, 3, H, W)
+            # 警告：通道子集有 {} 个通道。将每个选定通道作为独立的灰度图像可视化。
+            print(f"Warning: Channel subset has {visualizable_features.shape[1]} channels. Visualizing each selected channel as a separate grayscale image.")
+            # Collect each channel as a separate image (B, 1, H, W)
+            channel_images = [visualizable_features[:, i, :, :].unsqueeze(1) for i in range(visualizable_features.shape[1])]
+            # Stack these single-channel images. Resulting shape: (B * num_subset_channels, 1, H, W)
+            # This structure is suitable for make_grid
+            visualizable_features = torch.cat(channel_images, dim=0) # Concatenate along batch dimension
         # 如果子集通道数是 0 (尽管前面检查了 non_empty)，理论上不可能到达
         elif visualizable_features.shape[1] == 0:
             # 警告：通道子集为空。无法可视化。
@@ -260,7 +264,15 @@ def visualize_samples_and_outputs(writer: SummaryWriter,
         sequence_step_to_vis (int): 要可视化的特征层的序列步骤索引。
         visualize_decision_diff (bool): 是否可视化原始决策图和对抗决策图的差异。
     """
-    # print(f"Debug: visualize_samples_and_outputs called at step {step}") # Debug print
+    # # --- Add Debug Prints for Tensor Shapes and numel() ---
+    # print(f"DEBUG VIS: Step {step}")
+    # print(f"DEBUG VIS: original_image_cpu shape: {original_image.shape if original_image is not None else None}, numel: {original_image.numel() if original_image is not None else 0}")
+    # print(f"DEBUG VIS: original_features_cpu shape: {original_features.shape if original_features is not None else None}, numel: {original_features.numel() if original_features is not None else 0}")
+    # print(f"DEBUG VIS: feature_delta_cpu shape: {feature_delta.shape if feature_delta is not None else None}, numel: {feature_delta.numel() if feature_delta is not None else 0}")
+    # print(f"DEBUG VIS: adversarial_features_cpu shape: {adversarial_features.shape if adversarial_features is not None else None}, numel: {adversarial_features.numel() if adversarial_features is not None else 0}")
+    # print(f"DEBUG VIS: original_decision_map_cpu shape: {original_decision_map.shape if original_decision_map is not None else None}, numel: {original_decision_map.numel() if original_decision_map is not None else 0}")
+    # print(f"DEBUG VIS: adversarial_decision_map_cpu shape: {adversarial_decision_map.shape if adversarial_decision_map is not None else None}, numel: {adversarial_decision_map.numel() if adversarial_decision_map is not None else 0}")
+    # # --- End Debug Prints ---
 
     # 尝试从任意非空张量中获取批量大小和设备
     batch_size = 0
@@ -302,7 +314,7 @@ def visualize_samples_and_outputs(writer: SummaryWriter,
         # make_grid 需要输入形状 (B, C, H, W)
         # 假设原始图像是 3 通道 (RGB)
         if original_image_step.shape[1] == 3:
-            grid_image = make_grid(original_image_step, nrow=num_samples_to_show, normalize=True, range=(0, 1))
+            grid_image = make_grid(original_image_step, nrow=num_samples_to_show, normalize=True)
             writer.add_image('Samples/Original_Image', grid_image, step)
         else:
             # 警告：原始图像不是 3 通道 ({})。跳过原始图像可视化。
@@ -322,8 +334,8 @@ def visualize_samples_and_outputs(writer: SummaryWriter,
         if vis_orig_features.numel() > 0:
             # make_grid 需要输入形状 (B, C, H, W)
             # vis_orig_features 的形状是 (B, 1, H, W) 或 (B, 3, H, W)
-            grid_orig_features = make_grid(vis_orig_features, nrow=num_samples_to_show, normalize=True, range=(0, 1))
-            writer.add_image(f'Samples/Original_Features_Seq{vis_step_feat}_L2Norm', grid_orig_features, step)
+            grid_orig_features = make_grid(vis_orig_features, nrow=num_samples_to_show, normalize=True)
+            writer.add_image(f'Features/Original_Seq{vis_step_feat}_L2Norm', grid_orig_features, step)
 
         # 可视化特征扰动 Delta (如果可用)
         if feature_delta_cpu is not None and feature_delta_cpu.numel() > 0 and feature_delta_cpu.ndim == 5:
@@ -331,8 +343,8 @@ def visualize_samples_and_outputs(writer: SummaryWriter,
              if feature_delta_cpu.shape == original_features_cpu.shape:
                   vis_feature_delta = feature_to_visualizable(feature_delta_cpu, sequence_step=vis_step_feat, mode='l2_norm') # 示例：可视化 L2 范数
                   if vis_feature_delta.numel() > 0:
-                      grid_feature_delta = make_grid(vis_feature_delta, nrow=num_samples_to_show, normalize=True, range=(0, 1))
-                      writer.add_image(f'Samples/Feature_Perturbation_Delta_Seq{vis_step_feat}_L2Norm', grid_feature_delta, step)
+                      grid_feature_delta = make_grid(vis_feature_delta, nrow=num_samples_to_show, normalize=True)
+                      writer.add_image(f'Features/Feature_Perturbation_Delta_Seq{vis_step_feat}_L2Norm', grid_feature_delta, step)
              else:
                   # 警告：特征扰动 delta 形状 {} 与原始特征形状 {} 不匹配。跳过扰动可视化。
                   print(f"Warning: Feature delta shape {feature_delta_cpu.shape} != Original features shape {original_features_cpu.shape}. Skipping delta visualization.")
@@ -343,8 +355,8 @@ def visualize_samples_and_outputs(writer: SummaryWriter,
              if adversarial_features_cpu.shape == original_features_cpu.shape:
                   vis_adv_features = feature_to_visualizable(adversarial_features_cpu, sequence_step=vis_step_feat, mode='l2_norm') # 示例：可视化 L2 范数
                   if vis_adv_features.numel() > 0:
-                      grid_adv_features = make_grid(vis_adv_features, nrow=num_samples_to_show, normalize=True, range=(0, 1))
-                      writer.add_image(f'Samples/Adversarial_Features_Seq{vis_step_feat}_L2Norm', grid_adv_features, step)
+                      grid_adv_features = make_grid(vis_adv_features, nrow=num_samples_to_show, normalize=True)
+                      writer.add_image(f'Features/Adversarial_Seq{vis_step_feat}_L2Norm', grid_adv_features, step)
 
                   # 可视化原始特征与对抗特征的差异
                   # 计算差异的 L2 范数图
@@ -361,8 +373,8 @@ def visualize_samples_and_outputs(writer: SummaryWriter,
                        else:
                             normalized_diff_map = torch.zeros_like(feature_diff_l2_norm_map, device=feature_diff_l2_norm_map.device)
 
-                       grid_feature_diff = make_grid(normalized_diff_map, nrow=num_samples_to_show, normalize=False) # 差异图通常不需要 normalize 到 [0,1]
-                       writer.add_image(f'Samples/Feature_Difference_Seq{vis_step_feat}_L2Norm', grid_feature_diff, step)
+                       grid_feature_diff = make_grid(normalized_diff_map, nrow=num_samples_to_show, normalize=False)
+                       writer.add_image(f'Features/Feature_Difference_Seq{vis_step_feat}_L2Norm', grid_feature_diff, step)
              else:
                   # 警告：对抗特征形状 {} 与原始特征形状 {} 不匹配。跳过对抗特征和差异可视化。
                   print(f"Warning: Adversarial features shape {adversarial_features_cpu.shape} != Original features shape {original_features_cpu.shape}. Skipping adversarial features and difference visualization.")
@@ -379,20 +391,21 @@ def visualize_samples_and_outputs(writer: SummaryWriter,
                  if original_features_cpu.numel() > 0:
                       # original_features_cpu shape: (B, C, N, H, W)
                       # 展平除批量维度外的所有维度 for histogram
-                      original_features_flat_hist = original_features_cpu[:, :, hist_step_feat, :, :].reshape(num_samples_to_show, -1)
-                      for i in range(num_samples_to_show):
-                           # 将直方图数据移动到 CPU 并转换为 numpy
-                           writer.add_histogram(f'Histograms/Original_Features_Seq{hist_step_feat}/Sample{i}', original_features_flat_hist[i].cpu().numpy(), step)
+                      original_features_flat_hist_combined = original_features_cpu[:, :, hist_step_feat, :, :].reshape(-1).float().cpu().numpy()
+                      # 绘制原始特征的合并直方图
+                      writer.add_histogram(f'Histograms/Original_Features_Seq{hist_step_feat}', original_features_flat_hist_combined, step)
                  
                  if feature_delta_cpu is not None and feature_delta_cpu.numel() > 0 and feature_delta_cpu.shape == original_features_cpu.shape:
-                       feature_delta_flat_hist = feature_delta_cpu[:, :, hist_step_feat, :, :].reshape(num_samples_to_show, -1)
-                       for i in range(num_samples_to_show):
-                            writer.add_histogram(f'Histograms/Feature_Perturbation_Delta_Seq{hist_step_feat}/Sample{i}', feature_delta_flat_hist[i].cpu().numpy(), step)
+                       # 展平选定序列步骤的所有样本的扰动数据，以便绘制合并直方图
+                       feature_delta_flat_hist_combined = feature_delta_cpu[:, :, hist_step_feat, :, :].reshape(-1).float().cpu().numpy()
+                       # 绘制特征扰动的合并直方图
+                       writer.add_histogram(f'Histograms/Feature_Perturbation_Delta_Seq{hist_step_feat}', feature_delta_flat_hist_combined, step)
 
                  if adversarial_features_cpu is not None and adversarial_features_cpu.numel() > 0 and adversarial_features_cpu.shape == original_features_cpu.shape:
-                       adversarial_features_flat_hist = adversarial_features_cpu[:, :, hist_step_feat, :, :].reshape(num_samples_to_show, -1)
-                       for i in range(num_samples_to_show):
-                            writer.add_histogram(f'Histograms/Adversarial_Features_Seq{hist_step_feat}/Sample{i}', adversarial_features_flat_hist[i].cpu().numpy(), step)
+                       # 展平选定序列步骤的所有样本的对抗特征数据，以便绘制合并直方图
+                       adversarial_features_flat_hist_combined = adversarial_features_cpu[:, :, hist_step_feat, :, :].reshape(-1).float().cpu().numpy()
+                       # 绘制对抗特征的合并直方图
+                       writer.add_histogram(f'Histograms/Adversarial_Features_Seq{hist_step_feat}', adversarial_features_flat_hist_combined, step)
 
                  # 可视化通道子集 (仅对原始特征和对抗特征)
                  # 定义要可视化的通道子集 (示例：前 3 个，中间某个范围，最后一个)
@@ -410,15 +423,15 @@ def visualize_samples_and_outputs(writer: SummaryWriter,
                       vis_orig_features_subset = feature_to_visualizable(original_features_cpu, sequence_step=vis_step_feat, mode='channel_subset', channel_subset=valid_channel_subset)
                       if vis_orig_features_subset.numel() > 0:
                           # make_grid 将所有选定的通道并排放置
-                          grid_orig_features_subset = make_grid(vis_orig_features_subset, nrow=num_samples_to_show, normalize=True, range=(0, 1))
-                          writer.add_image(f'Channel_Subsets/Original_Features_Seq{vis_step_feat}', grid_orig_features_subset, step)
+                          grid_orig_features_subset = make_grid(vis_orig_features_subset, nrow=num_samples_to_show, normalize=True)
+                          writer.add_image(f'Feature_Channel_Subsets/Original_Seq{vis_step_feat}_Channels{valid_channel_subset}', grid_orig_features_subset, step)
                       
                       # 可视化对抗特征的通道子集 (如果可用)
                       if adversarial_features_cpu is not None and adversarial_features_cpu.numel() > 0 and adversarial_features_cpu.shape == original_features_cpu.shape:
                            vis_adv_features_subset = feature_to_visualizable(adversarial_features_cpu, sequence_step=vis_step_feat, mode='channel_subset', channel_subset=valid_channel_subset)
                            if vis_adv_features_subset.numel() > 0:
-                               grid_adv_features_subset = make_grid(vis_adv_features_subset, nrow=num_samples_to_show, normalize=True, range=(0, 1))
-                               writer.add_image(f'Channel_Subsets/Adversarial_Features_Seq{vis_step_feat}', grid_adv_features_subset, step)
+                               grid_adv_features_subset = make_grid(vis_adv_features_subset, nrow=num_samples_to_show, normalize=True)
+                               writer.add_image(f'Feature_Channel_Subsets/Adversarial_Seq{vis_step_feat}_Channels{valid_channel_subset}', grid_adv_features_subset, step)
 
 
     # --- 可视化决策图 (如果可用) ---
@@ -434,12 +447,12 @@ def visualize_samples_and_outputs(writer: SummaryWriter,
          if adversarial_decision_map_cpu is not None and adversarial_decision_map_cpu.numel() > 0 and adversarial_decision_map_cpu.shape == original_decision_map_cpu.shape:
               # 可视化原始决策图
               # 决策图通常不需要标准化到 [0,1]，直接显示其相对值即可
-              grid_orig_decision = make_grid(original_decision_map_cpu, nrow=num_samples_to_show, normalize=True) # normalize=True 可以帮助显示
-              writer.add_image('Samples/Original_Decision_Map', grid_orig_decision, step)
+              grid_orig_decision = make_grid(original_decision_map_cpu, nrow=num_samples_to_show, normalize=True)
+              writer.add_image('Decision_Maps/Original', grid_orig_decision, step)
 
               # 可视化对抗决策图
               grid_adv_decision = make_grid(adversarial_decision_map_cpu, nrow=num_samples_to_show, normalize=True)
-              writer.add_image('Samples/Adversarial_Decision_Map', grid_adv_decision, step)
+              writer.add_image('Decision_Maps/Adversarial', grid_adv_decision, step)
 
               # 可视化决策图的差异 (如果启用)
               if visualize_decision_diff:
@@ -454,9 +467,8 @@ def visualize_samples_and_outputs(writer: SummaryWriter,
                         else:
                              normalized_diff_map = torch.zeros_like(decision_diff_map, device=decision_diff_map.device)
 
-                        # 差异图通常是单通道，make_grid 默认会将单通道转为 3 通道灰度图
-                        grid_decision_diff = make_grid(normalized_diff_map, nrow=num_samples_to_show, normalize=False) # 差异图通常不需要 normalize 到 [0,1]
-                        writer.add_image('Samples/Decision_Map_Difference', grid_decision_diff, step)
+                        grid_decision_diff = make_grid(normalized_diff_map, nrow=num_samples_to_show, normalize=False)
+                        writer.add_image('Decision_Maps/Difference', grid_decision_diff, step)
          else:
               # 警告：对抗决策图为None或形状与原始决策图不匹配 ({} vs {})。跳过对抗决策图和差异可视化。
               print(f"Warning: Adversarial decision map is None or shape mismatch ({adversarial_decision_map_cpu.shape if adversarial_decision_map_cpu is not None else 'None'} vs {original_decision_map_cpu.shape}). Skipping adversarial decision map and difference visualization.")
@@ -535,7 +547,7 @@ def visualize_attention_maps(writer: SummaryWriter,
             # 可视化原始注意力图
             # make_grid 需要输入形状 (B, C, H, W)，这里 Batch=1, C=1
             # 注意力图通常归一化到 [0, 1]
-            grid_orig_attn = make_grid(orig_attn.unsqueeze(0).unsqueeze(0), nrow=1, normalize=True, range=(0, 1))
+            grid_orig_attn = make_grid(orig_attn.unsqueeze(0).unsqueeze(0), nrow=1, normalize=True)
             writer.add_image(f'Attention_Maps/Sample{i}_Head{j}/Original', grid_orig_attn, step)
 
             # 如果对抗注意力矩阵可用，可视化对抗注意力图和差异图
@@ -544,7 +556,7 @@ def visualize_attention_maps(writer: SummaryWriter,
                 adv_attn = attention_matrix_adv_cpu[i, j, :, :]
 
                 # 可视化对抗注意力图
-                grid_adv_attn = make_grid(adv_attn.unsqueeze(0).unsqueeze(0), nrow=1, normalize=True, range=(0, 1))
+                grid_adv_attn = make_grid(adv_attn.unsqueeze(0).unsqueeze(0), nrow=1, normalize=True)
                 writer.add_image(f'Attention_Maps/Sample{i}_Head{j}/Adversarial', grid_adv_attn, step)
 
                 # 可视化原始注意力图与对抗注意力图的差异 (绝对差异)

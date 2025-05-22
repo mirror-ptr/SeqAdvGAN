@@ -40,7 +40,7 @@ class IrisXeonNet(nn.Module):
         self.dropout4 = nn.Dropout(0.1)
 
     def forward(self, x):
-        x = torch.permute(x, (0, 4, 1, 2, 3))
+        # x = torch.permute(x, (0, 4, 1, 2, 3))
         x = self.conv1x1_1(x)
         x = self.norm_c1_1(x)
         x = self.relu(x)
