@@ -36,18 +36,19 @@ model:
 # 训练配置
 training:
   train_stage: 1 # 新增参数：当前训练阶段，1 代表初步特征攻击
-  batch_size: 100
-  num_epochs: 3 # 阶段一的 epoch 数量
+  batch_size: 64
+  num_epochs: 10 # 阶段一的 epoch 数量
   lr_g: 0.001
-  lr_d: 0.0002
+  lr_d: 0.001
   b1: 0.5
   b2: 0.999
   seed: 42
   device: "cuda"
   generator_weights_path: null # 如果从预训练模型开始，指定路径
   discriminator_weights_path: null # 如果从预训练模型开始，指定路径
-  resume_checkpoint: null # checkpoints/stage1/checkpoint_epoch_10_stage_1.pth # 继续训练的检查点路径
+  resume_checkpoint: null #tage1_train/checkpoints/epoch_10_stage_1.pth # 继续训练的检查点路径
   eval_interval: 5 # 每 5 个 epoch 评估一次
+  save_interval: 5 # 每隔多少个 epoch 保存一次检查点
   eval_success_threshold: 0.1 # 评估成功阈值
   eval_success_criterion: 'mse_diff_threshold' # 评估成功标准
 
@@ -77,7 +78,7 @@ losses:
   decision_loss_weight: 100.0 # 阶段一用于特征层攻击
   attention_loss_weight: 0.0 # 阶段一禁用注意力损失
   topk_k: 10 # 用于 Top-K 注意力损失 / 评估标准
-  gan_loss_weight: 0.01 # 用于降低 loss_G_gan 的权重：如果 Generator 的 GAN 损失下降过快，可能表明 Generator 正在牺牲攻击性来欺骗 Discriminator。
+  gan_loss_weight: 1.0 # 用于降低 loss_G_gan 的权重：如果 Generator 的 GAN 损失下降过快，可能表明 Generator 正在牺牲攻击性来欺骗 Discriminator。
 
 # 正则化配置
 regularization:
@@ -99,7 +100,7 @@ logging:
   log_interval: 10 # 每隔多少步打印一次日志
   vis_interval: 10 # 每隔多少步可视化一次结果
   num_vis_samples: 4 # 可视化样本数量
-  sequence_step_to_vis: 0 # 可视化哪个序列步骤的特征/扰动
+  sequence_step_to_vis: 1 # 可视化哪个序列步骤的特征/扰动
   num_vis_heads: 1 # 可视化多少个注意力头
 
 # 评估配置 (在 stage1 也会进行评估，但决策和注意力成功率可能为 0 或不准确)

@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, Tuple # 导入类型提示相关的模�
 # 确保你的 Python 环境可以找到 IrisBabel 模块
 try:
     from IrisBabel.nn.CNN.IrisXeonNet import IrisXeonNet
-    print("Successfully imported IrisXeonNet from IrisBabel.")
+   #print("Successfully imported IrisXeonNet from IrisBabel.")
 except ModuleNotFoundError as e:
     print(f"Error importing IrisXeonNet: {e}")
     print("Please ensure the IrisBabel module is correctly placed in the project root or in Python path.")
@@ -139,7 +139,7 @@ class AttentiveTriggerNetwork(nn.Module):
         self.feature_extractor = IrisFeatureHead(in_channels_feature=self.in_channels, 
                                                  seq_len=self.sequence_length,
                                                  height=self.height,
-                                                 width=self.width)
+                                                 width=self.width) 
 
         # --- 模拟决策层 ---
         # 从 feature_extractor 的输出 (B, 128, T_feat, H_feat, W_feat) 生成决策图 (B, H_dec, W_dec)
@@ -212,11 +212,11 @@ class AttentiveTriggerNetwork(nn.Module):
         # Define the simulated attention projection layer if input dimension is positive
         self.attention_projection = None # Initialize to None
         if simulated_attention_input_dim > 0:
-             self.attention_projection = nn.Linear(simulated_attention_input_dim, simulated_attention_output_dim)
+            self.attention_projection = nn.Linear(simulated_attention_input_dim, simulated_attention_output_dim)
         else:
              print("Warning: Simulated attention input dimension is 0. Attention projection layer not created.")
 
-
+        
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
@@ -296,7 +296,7 @@ class AttentiveTriggerNetwork(nn.Module):
         if T_feat > 0:
              # Check if the decision layer output has the expected dimensions before mean/squeeze
              if decision_map_raw.ndim == 5 and decision_map_raw.shape[1] == 1:
-                  decision_map = decision_map_raw.mean(dim=2).squeeze(1) # -> (B, H_dec, W_dec)
+                decision_map = decision_map_raw.mean(dim=2).squeeze(1) # -> (B, H_dec, W_dec)
              else:
                   print(f"Warning: Decision layer raw output has unexpected shape {decision_map_raw.shape}. Cannot calculate final decision map. Returning simulated empty tensor.")
                   # Simulate an empty tensor with expected spatial dimensions if calculation fails
@@ -319,35 +319,34 @@ class AttentiveTriggerNetwork(nn.Module):
         # 展平除了批量维度外的所有维度
         # Ensure feature dimensions are positive before flattening
         if C_feat > 0 and T_feat > 0 and H_feat > 0 and W_feat > 0:
-             flat_features_for_attn = features.view(B, -1) # (B, C_feat * T_feat * H_feat * W_feat)
-             expected_attn_proj_in_dim = C_feat * T_feat * H_feat * W_feat
+            flat_features_for_attn = features.view(B, -1) # (B, C_feat * T_feat * H_feat * W_feat)
+            expected_attn_proj_in_dim = C_feat * T_feat * H_feat * W_feat
              
              # Check if the attention projection layer was created (i.e., input dimension was positive)
-             if self.attention_projection is None:
+            if self.attention_projection is None:
                   print("Warning: Attention projection layer was not created during init. Cannot calculate attention matrix. Returning simulated matrix.")
                   # Return a simulated attention matrix if projection layer is missing
                   attention_matrix = torch.randn(B, self.num_heads, self.sequence_length, self.sequence_length, device=x.device) * float('nan') # Use NaN to mark simulated data
-             # Check if the actual flattened feature dimension matches the projection layer's input dimension
-             elif self.attention_projection.in_features is not None and flat_features_for_attn.shape[1] != self.attention_projection.in_features:
-                print(f"Warning: Attention projection input shape mismatch. Expected {self.attention_projection.in_features}, got {flat_features_for_attn.shape[1]}. This indicates an issue with simulated feature extractor output shape consistency.")
-                # If dimension mismatch occurs, the Linear layer will fail. Return simulated data.
-                print("Error: Flattened feature dimension mismatch with attention projection input dimension. Returning simulated matrix.")
-                attention_matrix = torch.randn(B, self.num_heads, self.sequence_length, self.sequence_length, device=x.device) * float('nan') # Use NaN to mark simulated data
-             else:
-                  # Use the simulated attention projection layer to map flattened features to flattened attention matrix dimension
-                  attention_matrix_flat = self.attention_projection(flat_features_for_attn)
+            elif self.attention_projection.in_features is not None and flat_features_for_attn.shape[1] != self.attention_projection.in_features:
+                 print(f"Warning: Attention projection input shape mismatch. Expected {self.attention_projection.in_features}, got {flat_features_for_attn.shape[1]}. This indicates an issue with simulated feature extractor output shape consistency.")
+                 # If dimension mismatch occurs, the Linear layer will fail. Return simulated data.
+                 print("Error: Flattened feature dimension mismatch with attention projection input dimension. Returning simulated matrix.")
+                 attention_matrix = torch.randn(B, self.num_heads, self.sequence_length, self.sequence_length, device=x.device) * float('nan') # Use NaN to mark simulated data
+            else:
+                 # Use the simulated attention projection layer to map flattened features to flattened attention matrix dimension
+                attention_matrix_flat = self.attention_projection(flat_features_for_attn)
 
-                  # 将展平的注意力矩阵重塑回 (B, heads, N, N) 的形状
-                  # 这里的 N 应该对应于注意力机制关注的序列长度。在 Transformer 中通常是输入的序列长度 (self.sequence_length)。
-                  expected_attn_matrix_shape = (B, self.num_heads, self.sequence_length, self.sequence_length)
-                  # Check if the flattened attention matrix size matches the expected reshaped size
-                  if attention_matrix_flat.shape[1] == self.num_heads * self.sequence_length * self.sequence_length:
-                       attention_matrix = attention_matrix_flat.view(expected_attn_matrix_shape)
-                       # 注意：模拟的注意力矩阵没有经过 Softmax 或其他归一化，实际的注意力会归一化。
-                  else:
-                       # If the flattened dimension doesn't match the expected attention matrix dimension, something is wrong.
-                       print(f"Warning: Simulated attention matrix flat dimension mismatch. Expected {self.num_heads * self.sequence_length * self.sequence_length}, got {attention_matrix_flat.shape[1]}. Returning simulated matrix.")
-                       attention_matrix = torch.randn(B, self.num_heads, self.sequence_length, self.sequence_length, device=x.device) * float('nan') # Use NaN to mark simulated data
+                # 将展平的注意力矩阵重塑回 (B, heads, N, N) 的形状
+                # 这里的 N 应该对应于注意力机制关注的序列长度。在 Transformer 中通常是输入的序列长度 (self.sequence_length)。
+                expected_attn_matrix_shape = (B, self.num_heads, self.sequence_length, self.sequence_length)
+                # Check if the flattened attention matrix size matches the expected reshaped size
+                if attention_matrix_flat.shape[1] == self.num_heads * self.sequence_length * self.sequence_length:
+                    attention_matrix = attention_matrix_flat.view(expected_attn_matrix_shape)
+                    # 注意：模拟的注意力矩阵没有经过 Softmax 或其他归一化，实际的注意力会归一化。
+                else:
+                    # If the flattened dimension doesn't match the expected attention matrix dimension, something is wrong.
+                    print(f"Warning: Simulated attention matrix flat dimension mismatch. Expected {self.num_heads * self.sequence_length * self.sequence_length}, got {attention_matrix_flat.shape[1]}. Returning simulated matrix.")
+                    attention_matrix = torch.randn(B, self.num_heads, self.sequence_length, self.sequence_length, device=x.device) * float('nan') # Use NaN to mark simulated data
 
         else:
              # If feature dimensions are non-positive, cannot flatten or compute attention
@@ -546,67 +545,17 @@ def get_atn_outputs(
                       # 如果是占位符，直接调用其 forward 方法，它返回包含所有输出的字典
                       atn_outputs = atn_model(x) # x 形状 (B, C, T, H, W)
                  elif isinstance(atn_model, IrisXeonNet):
-                      # 如果是实际的 IrisXeonNet
-                      # 根据对 IrisXeonNet.py 的理解，它的 forward 方法内部有 permute (0, 4, 1, 2, 3)
-                      # 如果输入 x 是 (B, C, T, H, W)，permute 后是 (B, W, C, T, H)
-                      # 这与 Conv3d 的 (B, C_in, D, H_in, W_in) 期望不符 (C_in=3)
-                      # ⚠️ 这里是一个需要根据实际 IrisXeonNet 的 forward 逻辑仔细适配的地方。
-                      # 假设 IrisXeonNet 期望输入就是 (B, C, T, H, W)，且其内部 permute 是为了某种内部处理。
-                      # 再次检查 IrisXeonNet Conv3d kernel: (1, 3, 3), stride (1, 3, 3)
-                      # 看起来 Conv3d 是对空间维度进行操作 (H, W)，序列维度 (T) 被视为深度。
-                      # 输入形状 (B, C, T, H, W) 对 Conv3d 来说是自然的。
-                      # 那 IrisXeonNet 的 forward 开头的 permute (0, 4, 1, 2, 3) 就非常奇怪了。
-                      # (B, C, T, H, W) -> (B, W, C, T, H)
-                      # 也许它是为了处理 (B, W, C, T, H) 这样的输入格式？
-
-                      # 另一个可能性是 IrisXeonNet 是为处理图像设计的，而不是视频序列，
-                      # T 维度在它的 Conv3d 中可能是 batch 维度？ 但 Conv3d 通常不在 batch 维度上卷积。
-
-                      # 让我们忽略 IrisXeonNet.py 中看起来有问题的 permute，假设它期望标准 Conv3d 输入 (B, C, T, H, W)。
-                      # 如果需要加载 feature head only，并且 IrisXeonNet 有一个可访问的 feature_extractor 属性
-                      if load_feature_head_only and hasattr(atn_model, 'feature_extractor') and callable(atn_model.feature_extractor):
-                           print("Warning: load_feature_head_only is True, but IrisXeonNet does not have a separate callable feature_extractor attribute.")
-                           print("Attempting to call full model forward instead.")
-                           # fall through to call full model forward
-                      
-                      # 调用实际 IrisXeonNet 模型的前向传播
-                      # 假设输入 x (B, C, T, H, W) 是模型期望的格式
-                      # ⚠️ 如果实际 IrisXeonNet 期望的输入格式不同，这里需要添加 permute 或其他预处理。
-                      # 根据 IrisXeonNet.py 的 forward 方法，它只返回一个值（似乎是最终的分类 logits）
-                      # features = atn_model(x) # 这将返回最终输出，不是中间特征或决策/注意力
-                      # 为了获取中间特征、决策和注意力，需要修改 IrisXeonNet 的 forward 方法，
-                      # 或者通过 hook 获取中间层输出。
-                      # 鉴于此，目前无法从原始 IrisXeonNet 获取决策和注意力。
-                      # 只能模拟返回一个字典。
-                      print("Warning: Cannot get decision/attention from the provided IrisXeonNet structure. Returning simulated outputs.")
-                      # 模拟返回 None 或占位符
-                      # features = None # 目前无法从 IrisXeonNet 获取中间特征
-                      # decision = None
-                      # attention = None
-
-                      # 根据 return_* flags 返回模拟的空张量或 None
-                      atn_outputs = {}
-                      if return_features:
-                          # 如果需要特征，但实际模型无法提供，返回 None 或空张量
-                          # 模拟一个特征输出张量 (B, 128, T, H/2, W/2)
-                          B_in, C_in, T_in, H_in, W_in = x.shape
-                          simulated_features = torch.empty(B_in, 128, T_in, H_in//2, W_in//2, device=x.device) * float('nan') # 使用 NaN 标记模拟数据
-                          atn_outputs['features'] = simulated_features
-                          print("Returning simulated empty features tensor.")
+                      # print(f"Debug: Input shape to IrisXeonNet: {x.shape}")
+                      features = atn_model(x)
+                      # 构建返回字典，只包含特征
+                      atn_outputs = {'features': features}
+                      # 由于加载的是特征头，不期望有决策和注意力输出
                       if return_decision:
-                           # 模拟一个决策图输出张量 (B, H/4, W/4)
-                           B_in, C_in, T_in, H_in, W_in = x.shape
-                           simulated_decision = torch.empty(B_in, H_in//4, W_in//4, device=x.device) * float('nan') # 使用 NaN 标记模拟数据
-                           atn_outputs['decision'] = simulated_decision
-                           print("Returning simulated empty decision map tensor.")
+                          print("Warning: get_atn_outputs - return_decision is True, but loading a feature head. Returning None for decision.")
+                          atn_outputs['decision'] = None # 返回 None 或空张量表示没有决策输出
                       if return_attention:
-                           # 模拟一个注意力矩阵输出张量 (B, heads, T, T)
-                           B_in, C_in, T_in, H_in, W_in = x.shape
-                           # 需要知道模型或 config 中的 num_heads
-                           num_heads_sim = 4 # 假设 4 个头，与占位符一致
-                           simulated_attention = torch.empty(B_in, num_heads_sim, T_in, T_in, device=x.device) * float('nan') # 使用 NaN 标记模拟数据
-                           atn_outputs['attention'] = simulated_attention
-                           print("Returning simulated empty attention matrix tensor.")
+                          print("Warning: get_atn_outputs - return_attention is True, but loading a feature head. Returning None for attention.")
+                          atn_outputs['attention'] = None # 返回 None 或空张量表示没有注意力输出
 
                  else:
                       # 如果模型既不是占位符也不是 IrisXeonNet，且有 forward 方法

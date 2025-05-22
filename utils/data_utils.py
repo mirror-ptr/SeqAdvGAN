@@ -69,7 +69,8 @@ class GameVideoDataset(Dataset):
                  sequence_length: int,
                  transform: Optional[Any] = None,
                  target_height: Optional[int] = None,
-                 target_width: Optional[int] = None
+                 target_width: Optional[int] = None,
+                 device: torch.device = torch.device('cpu')
                 ):
         """
         初始化游戏视频数据集实例。
@@ -83,6 +84,7 @@ class GameVideoDataset(Dataset):
             target_height (Optional[int], optional): 如果指定，将透视变换后的帧缩放到此高度。默认为 None。
             target_width (Optional[int], optional): 如果指定，将透视变换后的帧缩放到此宽度。默认为 None。
                                               如果只指定了其中一个，Resize 将不生效。如果两者都指定，优先使用它们。
+            device (torch.device, optional): 用于张量操作的设备。默认为 torch.device('cpu')。
         Raises:
             IOError: 如果无法打开视频文件进行初始化 (获取总帧数)。
         """
@@ -90,13 +92,14 @@ class GameVideoDataset(Dataset):
         self.video_path: str = video_path
         self.level_json_path: str = level_json_path
         self.sequence_length: int = sequence_length
-        self.transform: Optional[Any] = transform # Optional external transform (e.g., data augmentation)
+        self.transform: Optional[Any] = transform # Optional external transform
         self.target_height: Optional[int] = target_height
         self.target_width: Optional[int] = target_width
+        self.device: torch.device = device # Store the device for tensor operations
         
         # cv2.VideoCapture 实例：将在每个 worker 进程中由 worker_init_fn 初始化，避免多进程冲突。
         # 在主进程 __init__ 中将其初始化为 None。
-        self.cap: Optional[cv2.VideoCapture] = None # Type hint and initialize to None
+        self.cap: Optional[cv2.VideoCapture] = None # Initialize to None
 
         # --- 1. 初始化关卡和变换矩阵 ---
         # 尝试从关卡 JSON 文件计算透视变换矩阵和逆变换矩阵。
@@ -259,11 +262,11 @@ class GameVideoDataset(Dataset):
                  sequence_frames.append(None) # Append None if processing failed
                  continue # Skip to next frame in sequence
 
-            # Convert numpy array (H, W, C) to torch tensor (C, H, W) and move to device
+            # Convert numpy array (H, W, C) to torch tensor (C, H, W)
             # OpenCV reads as BGR, so convert to RGB
             # processed_frame is (H, W, C) after transform_image (which uses cv2.resize, preserving channel dim)
             # Permute to (C, H, W)
-            frame_tensor = torch.from_numpy(processed_frame).to(self.device).permute(2, 0, 1).float()
+            frame_tensor = torch.from_numpy(processed_frame).permute(2, 0, 1).float()
 
             # 应用 Resize transform 如果存在且已初始化
             if self.resize_transform:
