@@ -17,7 +17,7 @@ from utils.atn_utils import get_atn_outputs
 
 # Import mask loading/generation utility if needed
 # from utils.mask_utils import load_or_generate_mask # Placeholder
-from typing import Optional # Import Optional
+from typing import Optional, Dict, Any # Import Optional, Dict, Any
 from typing import List # Import List (if needed)
 
 
@@ -447,48 +447,51 @@ def calculate_perceptual_metrics(
 
 
     # LPIPS and SSIM Calculation (requires piq)
-    try:
-        from piq import LPIPS, ssim # type: ignore
-        piq_available = True
-        # print("piq library found.")
-    except ImportError:
-        # print("Warning: 'piq' library not found. Skipping LPIPS/SSIM. Install with 'pip install piq'")
-        piq_available = False
-    except Exception as e:
-        print(f"Warning: Error importing piq: {e}. Skipping LPIPS/SSIM.")
-        piq_available = False
+    # try:
+    #     from piq import LPIPS, ssim # type: ignore
+    #     piq_available = True
+    #     # print("piq library found.")
+    # except ImportError:
+    #     # print("Warning: 'piq' library not found. Skipping LPIPS/SSIM. Install with 'pip install piq'")
+    #     piq_available = False
+    # except Exception as e:
+    #     print(f"Warning: Error importing piq: {e}. Skipping LPIPS/SSIM.")
+    #     piq_available = False
 
-    if piq_available:
-        # print("Attempting to calculate perceptual metrics (LPIPS, SSIM) using piq...")
-        try:
-            # LPIPS: Input range is typically [0,1] or [-1,1], depending on the pretrained model.
-            # AlexNet LPIPS usually requires 3-channel RGB images.
-            # features_to_perceptual_input attempts to ensure 3-channel output.
-            # The LPIPS class in piq by default normalizes input from [0,1] to [-1,1].
-            # So, providing [0,1] should be fine.
-            if original_img_perceptual.shape[1] == 3:
-                 # Ensure LPIPS metric is on the correct device
-                 # LPIPS metric initialization compatible with piq 0.8.0
-                 lpips_metric = LPIPS(network='alex').to(device) # Re-initialize or move
-                 # lpips_metric expects tensors on the same device
-                 lpips_val = lpips_metric(original_img_perceptual * 2 - 1, adversarial_img_perceptual * 2 - 1).mean().item() # Map [0,1] to [-1,1]
-                 metrics['lpips'] = lpips_val
-            else:
-                 print(f"Warning: LPIPS expects 3 channels, got {original_img_perceptual.shape[1]}. Skipping LPIPS.")
-                 metrics['lpips'] = float('nan')
+    # if piq_available:
+    #     # print("Attempting to calculate perceptual metrics (LPIPS, SSIM) using piq...")
+    #     try:
+    #         # LPIPS: Input range is typically [0,1] or [-1,1], depending on the pretrained model.
+    #         # AlexNet LPIPS usually requires 3-channel RGB images.
+    #         # features_to_perceptual_input attempts to ensure 3-channel output.
+    #         # The LPIPS class in piq by default normalizes input from [0,1] to [-1,1].
+    #         # So, providing [0,1] should be fine.
+    #         if original_img_perceptual.shape[1] == 3:
+    #              # Ensure LPIPS metric is on the correct device
+    #              # LPIPS metric initialization compatible with piq 0.8.0
+    #              lpips_metric = LPIPS().to(device) # Re-initialize or move
+    #              # lpips_metric expects tensors on the same device
+    #              lpips_val = lpips_metric(original_img_perceptual * 2 - 1, adversarial_img_perceptual * 2 - 1).mean().item() # Map [0,1] to [-1,1]
+    #              metrics['lpips'] = lpips_val
+    #         else:
+    #              print(f"Warning: LPIPS expects 3 channels, got {original_img_perceptual.shape[1]}. Skipping LPIPS.")
+    #              metrics['lpips'] = float('nan')
 
-            # SSIM: Input range is typically [0,1] or [0, 255] (data_range must match).
-            # SSIM can be calculated on single-channel or multi-channel images.
-            # perceptual_img is already float [0, 1]
-            ssim_val = ssim(original_img_perceptual, adversarial_img_perceptual, data_range=1., reduction='mean').item()
-            metrics['ssim'] = ssim_val
-        except Exception as e:
-            print(f"Error calculating LPIPS/SSIM using piq: {e}")
-            metrics['lpips'] = float('nan')
-            metrics['ssim'] = float('nan')
-    else: # piq not available
-        metrics['lpips'] = float('nan')
-        metrics['ssim'] = float('nan')
+    #         # SSIM: Input range is typically [0,1] or [0, 255] (data_range must match).
+    #         # SSIM can be calculated on single-channel or multi-channel images.
+    #         # perceptual_img is already float [0, 1]
+    #         ssim_val = ssim(original_img_perceptual, adversarial_img_perceptual, data_range=1., reduction='mean').item()
+    #         metrics['ssim'] = ssim_val
+    #     except Exception as e:
+    #         print(f"Error calculating LPIPS/SSIM using piq: {e}")
+    #         metrics['lpips'] = float('nan')
+    #         metrics['ssim'] = float('nan')
+    # else: # piq not available
+    #     metrics['lpips'] = float('nan')
+    #     metrics['ssim'] = float('nan')
+
+    metrics['lpips'] = float('nan') # Explicitly set LPIPS to NaN
+    metrics['ssim'] = float('nan') # Explicitly set SSIM to NaN
 
 
     return metrics
@@ -500,380 +503,130 @@ def evaluate_model(
     atn_model: torch.nn.Module,
     dataloader: torch.utils.data.DataLoader,
     device: torch.device,
-    cfg: object, # Use a more specific type hint if possible, e.g., EasyDict
+    cfg: Any, # Use Any or EasyDict if available
     current_train_stage: int
-) -> dict:
+) -> Dict[str, float]:
     """
-    根据当前训练阶段评估生成器和判别器的性能。
+    在评估数据集上评估生成器和判别器的性能。
 
      Args:
-        generator (Optional[torch.nn.Module]): 生成器模型。如果评估原始数据，可以为 None。
-        discriminator (Optional[torch.nn.Module]): 判别器模型。如果不需要 GAN 指标，可以为 None。
-        atn_model (nn.Module): ATN 模型。
-        dataloader (DataLoader): 评估数据加载器。
+        generator (Optional[torch.nn.Module]): 生成器模型。在 Stage 1 评估时需要。
+        discriminator (Optional[torch.nn.Module]): 判别器模型。如果需要评估判别器性能（如得分），则需要。
+        atn_model (torch.nn.Module): ATN 模型（冻结）。
+        dataloader (torch.utils.data.DataLoader): 评估数据加载器。
         device (torch.device): 计算设备。
-        cfg (object): 包含评估参数的配置对象 (EasyDict 或类似结构)。
+        cfg (Any): 配置对象。
         current_train_stage (int): 当前训练阶段 (1 或 2)。
 
     Returns:
-        dict: 包含评估指标的字典。
+        Dict[str, float]: 包含评估指标名称及其对应值的字典。
+                          例如：{'Feature_L2_Diff_Avg': 0.5, 'Feature_Cosine_Sim_Avg': 0.9, ...}
     """
-    # 设置模型为评估模式 (ATN 模型通常在训练期间也保持评估模式)
-    if generator is not None:
-        generator.eval()
-    if discriminator is not None:
-        discriminator.eval()
-    # ATN 模型通常在训练和评估期间都保持 eval 模式
+    # 确保 ATN 模型处于评估模式
     atn_model.eval()
 
-    # 初始化指标存储
-    total_attack_success_rate_decision = 0.0
-    total_attack_success_rate_attention = 0.0
-    total_attack_success_rate_feature = 0.0 # 新增：阶段1的特征攻击成功率
-    total_linf_norm = 0.0
-    total_l2_norm = 0.0
-    avg_D_real_score = 0.0
-    avg_D_fake_score = 0.0
-    total_samples = 0
-    all_psnr = []
-    all_lpips = []
-    all_ssim = []
+    # 如果生成器模型存在且当前是 Stage 1，将生成器设为评估模式
+    # Stage 1 评估需要生成器来产生对抗特征
+    if generator is not None and current_train_stage == 1:
+        generator.eval()
 
-    # 判断是否应该计算感知指标 (通常在输入数据是图像时相关)
-    # 假设 cfg.data.channels == 3 表示输入是图像类型
-    calculate_perceptual = getattr(cfg.data, 'channels', 0) == 3 # 安全地获取channels参数
+    # 如果判别器模型存在，将判别器设为评估模式
+    if discriminator is not None:
+        discriminator.eval() # 即使 Stage 1 不直接评估判别器，设为评估模式是好习惯
 
-    # 如果需要，初始化感知指标计算器
-    if calculate_perceptual:
-        try:
-            # 尝试导入 piq 库 (延迟导入)
-            from piq import LPIPS, ssim # type: ignore 
-            # LPIPS 度量初始化兼容 piq 0.8.0
-            # 在评估循环外部初始化 LPIPS 度量，以便在多个批次之间重用
-            # 使用一个单独的实例 if needed
-            lpips_metric_eval = LPIPS(network='alex').to(device) # 移动到正确设备
-            # SSIM 不需要像 LPIPS 那样显式初始化
-            piq_available = True
-        except ImportError:
-            # 警告：未找到 piq 库。跳过 LPIPS 和 SSIM 指标。请使用 'pip install piq' 安装。
-            print("Warning: piq library not found. Skipping LPIPS and SSIM metrics. Install with 'pip install piq'.")
-            calculate_perceptual = False # 如果 piq 缺失则禁用感知指标
-        except Exception as e:
-            # 警告：初始化感知指标时出错 (评估阶段)：{}。跳过 LPIPS 和 SSIM。
-            print(f"Warning: Error initializing perceptual metrics (evaluation): {e}. Skipping LPIPS and SSIM.")
-            calculate_perceptual = False
+    print(f"Starting evaluation for Stage {current_train_stage}...")
 
-    # 在 torch.no_grad() 上下文中进行评估，不计算梯度
-    with torch.no_grad(): # 确保评估期间不计算梯度
-        # 获取评估批次数量，如果配置中没有指定，则使用数据加载器的全部批次
-        num_eval_batches = cfg.evaluation.get('num_eval_batches', len(dataloader)) # 使用 config 中配置的数量
-        # 确保评估批次数量不超过数据加载器中的实际批次数量
-        if num_eval_batches > len(dataloader): 
-            num_eval_batches = len(dataloader)
-        # 处理数据加载器为空的情况
-        if num_eval_batches == 0: 
-             # 警告：评估期间数据加载器为空。
-             print("Warning: Dataloader is empty during evaluation.")
-             # 返回包含 NaN 的字典
-             return {
-                'Attack_Success_Rate_Decision_Stage'+str(current_train_stage): float('nan'),
-                'Attack_Success_Rate_Attention_Stage'+str(current_train_stage): float('nan'),
-                'Attack_Success_Rate_Feature_Stage'+str(current_train_stage): float('nan'),
-                'Linf_Norm_Avg': float('nan'),
-                'L2_Norm_Avg': float('nan'),
-                'Discriminator_Real_Score_Avg': float('nan'),
-                'Discriminator_Fake_Score_Avg': float('nan'),
-                'PSNR_Avg': float('nan'),
-                'LPIPS_Avg': float('nan'),
-                'SSIM_Avg': float('nan'),
-            }
+    # 初始化指标字典和用于累积指标的列表
+    eval_metrics: Dict[str, list] = {}
 
+    # 使用 torch.no_grad() 上下文管理器，确保在评估期间不计算梯度
+    with torch.no_grad():
         # 遍历评估数据加载器
-        for batch_idx, original_input in enumerate(dataloader):
-            # 如果已达到指定的评估批次数量，则停止
-            if batch_idx >= num_eval_batches:
-                break
+        # 使用 tqdm 显示评估进度条
+        from tqdm import tqdm # Import tqdm here for local use in this function
+        for i, batch_data in tqdm(enumerate(dataloader), total=len(dataloader), desc="Evaluating"):
+            real_x = batch_data.to(device) # 原始图像数据 (B, C_img, T, H_img, W_img)
 
-            # 将原始输入数据移动到计算设备
-            original_input = original_input.to(device)
-            batch_size = original_input.shape[0]
-            # 处理当前批次为空的情况
-            if batch_size == 0: continue
-
-            # 在将输入传递给生成器之前，通过 ATN 获取特征 (原始输入是图像数据)
-            # 在 torch.no_grad() 上下文外部进行，因为 get_atn_outputs 内部可能有自己的 no_grad()
-            # 或者确保 get_atn_outputs 不会计算梯度
-            # 这里的 atn_model 应该始终是 .eval() 模式
-            # 确保 get_atn_outputs 不会计算梯度
-            # 方式1: 在调用 get_atn_outputs 前加 with torch.no_grad():
-            # 方式2: 确保 get_atn_outputs 内部有 torch.no_grad()
-            # 方式3: 确保 atn_model 在 eval 模式下不会产生需要梯度的操作
-            # 鉴于 evaluate_model 整体在 no_grad() 中，这里是安全的。
-            
-            if atn_model is not None:
-                # 通过 ATN 模型获取原始输入的输出，包括特征 (即使在阶段2也获取特征)
-                # return_features=True 是为了计算阶段1的特征攻击成功率，以及 GAN 评估指标
+            # Stage 1 评估：关注特征差异
+            if current_train_stage == 1:
+                # 1. 获取原始特征
                 original_atn_outputs = get_atn_outputs(
                     atn_model,
-                    original_input, # 传递原始图像数据
-                    return_features=True,
-                    return_decision=True, # 在评估阶段通常需要决策和注意力
-                    return_attention=True
+                    real_x, # 输入原始图像
+                    return_features=True, # 需要原始特征
+                    return_decision=False, # Stage 1 评估通常不关注决策/注意力
+                    return_attention=False
                 )
                 original_features = original_atn_outputs.get('features')
-                original_decision_map = original_atn_outputs.get('decision')
-                original_attention_map = original_atn_outputs.get('attention')
 
-                # 如果原始特征为空或维度不正确，无法进行后续评估
+                # 检查是否成功获取原始特征
                 if original_features is None or original_features.numel() == 0:
-                    # 错误：ATN 模型在评估期间返回 None 或空特征。无法继续。
-                    print("Error: ATN model returned None or empty features during evaluation. Cannot proceed.")
-                    return {} # 返回空字典表示评估失败
-            else:
-                # 错误：评估期间 ATN 模型为None。无法获取特征。
-                print("Error: ATN model is None during evaluation. Cannot get features.")
-                return {} # 返回空字典表示评估失败
+                    print(f"Warning: Evaluation batch {i} - Failed to get original features from ATN. Skipping batch for feature metrics.")
+                    continue # 如果没有原始特征，跳过当前批次的特征评估
 
-            # 生成器根据当前阶段的输入产生扰动
-            # 在阶段1，Generator 输入是特征，输出是特征扰动 delta
-            # 在阶段2，Generator 输入是图像，输出是图像扰动 delta
-            if generator is not None:
-                # 将原始特征传递给生成器 (阶段1)
-                if current_train_stage == 1:
-                     # delta 是特征扰动 (B, C_feat, N, W_feat, H_feat)
-                     delta = generator(original_features)
-                # 在阶段2，生成器输入可能是原始图像 (如果 cfg.data.channels == 3) 或其他
-                elif current_train_stage == 2:
-                     # 假设阶段2的生成器输入是原始图像数据
-                     # delta 是图像扰动 (B, C_img, T, H_img, W_img)
-                     delta = generator(original_input) # 假设 generator 处理原始图像输入
-                else:
-                     # 错误：不支持的训练阶段 {} 用于生成器输入确定。
-                     print(f"Error: Unsupported training stage {current_train_stage} for generator input determination.")
-                     return {} # 返回空字典表示评估失败
-            else: # 如果生成器为 None，则扰动为零
-                # 如果 generator 为 None (例如，仅评估原始样本)，delta 为零
-                if current_train_stage == 1: # 阶段1，delta 是特征扰动
-                    delta = torch.zeros_like(original_features)
-                elif current_train_stage == 2: # 阶段2，delta 是图像扰动
-                    delta = torch.zeros_like(original_input) # 假设原始输入是图像
-                else:
-                    delta = None # 如果阶段未知或不支持，delta 为 None
+                # 2. 使用 Generator 生成对抗特征
+                if generator is None:
+                     print("Error: Generator is None, but needed for Stage 1 evaluation. Skipping evaluation.")
+                     return {} # 如果生成器为 None，无法进行 Stage 1 评估
 
-            # 应用扰动并获取对抗样本/特征
-            adversarial_input = None
-            adversarial_features = None
-            adversarial_decision_map = None
-            adversarial_attention_map = None
+                # Generator takes original features as input in Stage 1
+                # Ensure original_features is on the correct device
+                delta = generator(original_features.to(device)) # 生成特征扰动
+                adversarial_features = original_features.to(device) + delta # 计算对抗特征
 
-            if delta is not None:
-                if current_train_stage == 1:
-                    # 阶段1：在特征空间应用扰动
-                    # 对抗特征 = 原始特征 + 特征扰动
-                    adversarial_features = original_features + delta # delta 是特征扰动
-                    # 在阶段1评估中，通常不需要将对抗特征通过 ATN 重新获取决策/注意力
-                    # 因为攻击目标是特征本身。决策和注意力评估主要在阶段2进行。
-
-                elif current_train_stage == 2:
-                    # 阶段2：在图像空间应用扰动
-                    # 对抗输入 = 原始输入 + 图像扰动，并进行裁剪
-                    # 假设原始输入 original_input 是图像数据 (B, C, T, H, W)
-                    adversarial_input = torch.clamp(original_input + delta, 0, 1) # delta 是图像扰动
-
-                    # 在阶段2评估中，将对抗输入通过 ATN 重新获取决策和注意力
-                    adversarial_atn_outputs = get_atn_outputs(
-                         atn_model,
-                         adversarial_input, # 传递对抗图像
-                         return_features=True, # 仍然获取特征用于 GAN 评估
-                         return_decision=True,
-                         return_attention=True
-                    )
-                    adversarial_features = adversarial_atn_outputs.get('features')
-                    adversarial_decision_map = adversarial_atn_outputs.get('decision')
-                    adversarial_attention_map = adversarial_atn_outputs.get('attention')
-                # else: Unsupported stage handled before
-
-            # --- 计算基于当前阶段的评估指标 ---
-
-            # 攻击成功率 (特征攻击 - 仅在阶段1评估中相关)
-            # 此计算需要 original_features (从最开始的 get_atn_outputs 调用获取)
-            # 和 adversarial_features (在阶段1内部计算为 original_features + delta)。
-            # 确保特征可用且不是 None 或空
-            if current_train_stage == 1 and original_features is not None and adversarial_features is not None:
-                 # 假设特征攻击成功意味着特征之间存在较大的 MSE 差异
-                 # 使用 cfg.evaluation 中的 success_threshold 和 success_criterion
-                 # 注意：在 calculate_attack_success_rate 内部，如果 criterion 是 mse_diff_threshold
-                 # higher_is_better_orig = False 表示我们希望差异越大越好 (这代表成功的特征攻击)
-                 success_rate_feature = calculate_attack_success_rate(
-                      original_features.view(batch_size, -1), # 展平特征以兼容标准函数
-                      adversarial_features.view(batch_size, -1), # 展平特征
-                      cfg.evaluation.success_threshold, # 使用 config 中的阈值
-                      success_criterion='mse_diff_threshold', # 特征攻击成功率基于特征差异的 MSE
-                      higher_is_better_orig=False # 对于特征差异，差异越大攻击效果越好
-                 )
-                 total_attack_success_rate_feature += success_rate_feature * batch_size # 累加按样本数加权的成功率
-            # 决策图和注意力成功率仅在阶段2计算
-
-            # 攻击成功率 (决策图 - 仅在阶段2评估中相关)
-            if current_train_stage == 2 and original_decision_map is not None and adversarial_decision_map is not None:
-                # 假设 ATN 决策图的值越高越好 (例如代表置信度)，攻击目标是降低它
-                # 使用 cfg.evaluation 中为决策图指定的成功标准和阈值
-                # calculate_attack_success_rate 函数会处理 higher_is_better_orig=True 的情况
-                success_rate_decision = calculate_attack_success_rate(
-                    original_decision_map, # (B, H, W) 或 (B, W, H)
-                    adversarial_decision_map,
-                    cfg.evaluation.success_threshold, # 使用 config 中的阈值
-                    cfg.evaluation.success_criterion, # 使用 config 中为决策图评估指定的标准
-                    higher_is_better_orig=True # 假设更高的决策值对于原始 ATN 更好
+                # 3. 计算特征差异相关的指标
+                # 使用 calculate_perceptual_metrics 计算特征差异（L2 范数和余弦相似度）
+                # calculate_perceptual_metrics 期望输入形状 (B, C, H, W) 或 (B, C, N, H, W)
+                # 如果是 5D (B, C, N, H, W)，它会在指定的 sequence_step_to_vis 步骤进行计算
+                # 确保配置中有 evaluation.sequence_step_to_vis
+                seq_step_eval = getattr(cfg.evaluation, 'sequence_step_to_vis', 0) # 默认评估序列步骤 0
+                # calculate_perceptual_metrics 需要 5D 输入
+                perceptual_metrics = calculate_perceptual_metrics(
+                    original_features=original_features, # shape (B, C, N, H, W)
+                    adversarial_features=adversarial_features, # shape (B, C, N, H, W)
+                    device=device,
+                    sequence_step_to_vis=seq_step_eval # 使用配置中指定的评估序列步骤
                 )
-                total_attack_success_rate_decision += success_rate_decision * batch_size # 累加按样本数加权的成功率
 
-            # 攻击成功率 (注意力图 - 仅在阶段2评估中相关)
-            if current_train_stage == 2 and original_attention_map is not None and adversarial_attention_map is not None:
-                 # 使用配置中特定于注意力的成功标准/阈值 (如果存在)
-                 # 否则，使用默认的评估标准/阈值
-                 attention_success_criterion = cfg.evaluation.get('attention_success_criterion', cfg.evaluation.success_criterion)
-                 attention_success_threshold = cfg.evaluation.get('attention_success_threshold', cfg.evaluation.success_threshold)
-                 # 获取用于 Top-K 评估的 K 值，优先使用 losses.topk_k，否则默认 10
-                 eval_topk_k = cfg.losses.get('topk_k', 10) 
+                # 4. 收集当前批次的指标
+                for metric_name, metric_value in perceptual_metrics.items():
+                    if metric_name not in eval_metrics:
+                        eval_metrics[metric_name] = []
+                    eval_metrics[metric_name].append(metric_value) # perceptual_metrics 返回的是标量值列表，直接添加
 
-                 # calculate_attack_success_rate 函数会根据 criterion 使用 topk_k
-                 success_rate_attention = calculate_attack_success_rate(
-                     original_attention_map, # (B, head, N, N)
-                     adversarial_attention_map,
-                     attention_success_threshold,
-                     attention_success_criterion, # 使用特定于注意力的标准 (例如 'topk_value_drop', 'topk_position_change')
-                     topk_k=eval_topk_k # 使用配置中的 K 值
-                 )
-                 total_attack_success_rate_attention += success_rate_attention * batch_size # 累加按样本数加权的成功率
+                # （可选）计算判别器得分 (仅用于 Stage 1 评估，观察判别能力)
+                if discriminator is not None:
+                     D_real_output = discriminator(original_features)
+                     D_fake_output = discriminator(adversarial_features)
+                     if 'Discriminator_Score_Real_Avg' not in eval_metrics:
+                          eval_metrics['Discriminator_Score_Real_Avg'] = []
+                          eval_metrics['Discriminator_Score_Fake_Avg'] = []
+                     eval_metrics['Discriminator_Score_Real_Avg'].append(D_real_output.mean().item())
+                     eval_metrics['Discriminator_Score_Fake_Avg'].append(D_fake_output.mean().item())
 
-            # 扰动范数 (在两个阶段都相关)
-            # delta 必须可用且不是 None 或空
-            # 在阶段1，delta 是特征扰动 (B, C_feat, N, W_feat, H_feat)
-            # 在阶段2，delta 是图像扰动 (B, C_img, T, H_img, W_img)
-            if generator is not None and delta is not None and delta.numel() > 0:
-                # linf_norm 和 l2_norm 函数需要张量形状类似 (B, C, N, H, W)
-                # 确保 delta 具有正确的维度
-                if delta.ndim == 5:
-                     # 计算 L-inf 和 L2 范数，取批量平均后累加
-                     total_linf_norm += linf_norm(delta).mean().item() * batch_size # 对每个样本计算范数，然后取批量平均
-                     total_l2_norm += l2_norm(delta).mean().item() * batch_size
-                else:
-                     # 警告：用于范数计算的 delta 张量不是5D ({})。
-                     print(f"Warning: Delta tensor for norm calculation is not 5D ({delta.ndim}D).")
 
-            # GAN 评估指标 (在两个阶段都相关，如果使用了判别器)
-            # 需要原始特征和对抗特征，以及判别器
-            # 确保特征可用且不是 None 或空，判别器也可用
-            if discriminator is not None and original_features is not None and adversarial_features is not None:
-                 # 确保特征适合判别器输入 (例如，正确的形状和值范围)
-                 # 假设判别器输入是 ATN 特征头输出的特征 (B, C_feat, N, W_feat, H_feat)
-                 # 需要确保 original_features 和 adversarial_features 从 get_atn_outputs 获取后是这个形状
-                 try:
-                     # 通过判别器获取对真实和伪造特征的输出
-                     # 使用 detach() 确保不计算判别器评估时的梯度
-                     D_real_output = discriminator(original_features.detach()) # (B, ...)
-                     D_fake_output = discriminator(adversarial_features.detach()) # (B, ...)
+            # TODO: Stage 2 评估逻辑 (计算决策成功率，注意力攻击效果等)
+            elif current_train_stage == 2:
+                 print("Stage 2 evaluation not fully implemented yet.")
+                 pass # Add Stage 2 evaluation logic here
 
-                     # 判别器输出形状通常为 (B, 1) 或 (B, 1, patch_N, patch_H, patch_W)
-                     # 展平除批量维度外的所有维度，计算每个样本的平均得分，然后对批量求和
-                     # view(batch_size, -1) 将 (B, 1, patch_N, patch_H, patch_W) 展平为 (B, patch_N*patch_H*patch_W)
-                     # mean(dim=-1) 计算每个样本展平后的平均得分
-                     # sum().item() 计算所有样本的平均得分总和 (稍后除以 total_samples 得到最终平均值)
-                     avg_D_real_score += D_real_output.view(batch_size, -1).mean(dim=-1).sum().item()
-                     avg_D_fake_score += D_fake_output.view(batch_size, -1).mean(dim=-1).sum().item()
-                 except Exception as e:
-                     # 警告：计算 GAN 评估指标时出错：{}。跳过此批次。
-                     print(f"Warning: Error calculating GAN evaluation metrics: {e}. Skipping for this batch.")
 
-            # 感知指标 (仅在输入是图像且 calculate_perceptual 为 True 时相关)
-            # 这些指标理想情况下应该在原始输入空间计算，而不是特征空间
-            # 如果生成器输入是图像并输出图像扰动，使用 original_input 和 adversarial_input
-            # 如果生成器输入是特征并输出特征扰动 (阶段1)，则在特征上计算这些指标可能没有意义
-            # 假设当 calculate_perceptual 为 True 时，生成器输入是图像 (3通道)
-            # 也假设 original_input 在阶段2是图像数据 (B, C_img, T, H_img, W_img)
-            if calculate_perceptual and original_input is not None and original_input.shape[1] == 3 and adversarial_input is not None:
-                 try:
-                     # 假设 original_input 和 adversarial_input 是形状为 (B, C, T, H, W) 的图像数据
-                     # 选择序列中的特定帧 (例如，第一个，由 cfg.logging.sequence_step_to_vis 指定) 进行2D感知比较
-                     # sequence_step_to_vis 必须小于序列长度 T
-                     seq_len_input = original_input.shape[2] # 输入图像序列长度
-                     vis_step = getattr(cfg.logging, 'sequence_step_to_vis', 0) # 从配置中获取可视化步骤，默认 0
-                     if vis_step >= seq_len_input or vis_step < 0:
-                          # 警告：配置中的可视化步骤 {} 超出输入图像序列长度 {} 范围。将使用第一个步骤 (0)。
-                          print(f"Warning: sequence_step_to_vis ({vis_step}) in config exceeds input image sequence length ({seq_len_input}). Using first step (0).")
-                          vis_step = 0
+    # 计算所有批次的平均指标
+    average_metrics: Dict[str, float] = {}
+    if eval_metrics:
+        print("Calculating average evaluation metrics...")
+        for metric_name, metric_values in eval_metrics.items():
+            if metric_values: # 确保列表不为空
+                 average_metrics[metric_name] = float(np.mean(metric_values)) # 计算平均值并转换为 float
+            else:
+                 average_metrics[metric_name] = float('nan') # 如果列表为空，记为 NaN
 
-                     # 提取指定序列步骤的帧 (B, C, H, W)
-                     original_frame_eval = original_input[:, :, vis_step, :, :].squeeze(2) # squeeze(2) 移除序列维度
-                     adversarial_frame_eval = adversarial_input[:, :, vis_step, :, :].squeeze(2)
-
-                     # PSNR
-                     # 假设数据归一化到 [0, 1]
-                     psnr_vals_batch = calculate_psnr(original_frame_eval, adversarial_frame_eval, data_range=1.0) 
-                     # 将当前批次的 PSNR 值添加到列表中
-                     all_psnr.extend(psnr_vals_batch.cpu().numpy().tolist()) # 将 tensor 转移到 CPU 并转换为 list
-
-                     # LPIPS 和 SSIM (如果 piq 可用)
-                     # 检查 lpips_metric_eval 是否已成功初始化
-                     if piq_available and 'lpips_metric_eval' in locals(): 
-                          # LPIPS 期望范围 [-1, 1]，SSIM 期望 [0, 1]
-                          # 将 [0,1] 映射到 [-1,1] 用于 LPIPS
-                          lpips_val_batch = lpips_metric_eval(original_frame_eval * 2 - 1, adversarial_frame_eval * 2 - 1).mean().item()
-                          all_lpips.append(lpips_val_batch) # 累加 LPIPS 值
-                          # SSIM 计算，data_range=1.0
-                          ssim_val_batch = ssim(original_frame_eval, adversarial_frame_eval, data_range=1.0, reduction='mean').item()
-                          all_ssim.append(ssim_val_batch) # 累加 SSIM 值
-
-                 except Exception as e:
-                      # 警告：计算此批次的感知指标时出错：{}。跳过。
-                      print(f"Warning: Error calculating perceptual metrics for this batch: {e}. Skipping.")
-
-            # 累加总样本数
-            total_samples += batch_size
-
-    # --- 计算总体平均指标 ---
-
-    # 只报告与当前阶段相关的攻击成功率
-    # 如果 total_samples 为 0，则平均值为 NaN
-    avg_attack_success_rate_feature = total_attack_success_rate_feature / total_samples if total_samples > 0 else float('nan')
-    avg_attack_success_rate_decision = total_attack_success_rate_decision / total_samples if total_samples > 0 else float('nan')
-    avg_attack_success_rate_attention = total_attack_success_rate_attention / total_samples if total_samples > 0 else float('nan')
-
-    # 计算平均扰动范数
-    avg_linf_norm = total_linf_norm / total_samples if total_samples > 0 else float('nan')
-    avg_l2_norm = total_l2_norm / total_samples if total_samples > 0 else float('nan')
-
-    # 计算平均判别器得分
-    avg_D_real_score = avg_D_real_score / total_samples if total_samples > 0 else float('nan')
-    avg_D_fake_score = avg_D_fake_score / total_samples if total_samples > 0 else float('nan')
-
-    # 处理感知指标列表可能为空或包含 NaN 的情况
-    # np.nanmean 会忽略 NaN 值进行平均
-    avg_psnr = np.nanmean(all_psnr) if all_psnr else float('nan') # 如果列表为空则为 NaN
-    avg_lpips = np.nanmean(all_lpips) if all_lpips else float('nan')
-    avg_ssim = np.nanmean(all_ssim) if all_ssim else float('nan')
-
-    # 将结果收集到字典中
-    metrics = {
-        f'Attack_Success_Rate_Decision_Stage{current_train_stage}': avg_attack_success_rate_decision if current_train_stage == 2 else float('nan'),
-        f'Attack_Success_Rate_Attention_Stage{current_train_stage}': avg_attack_success_rate_attention if current_train_stage == 2 else float('nan'),
-        f'Attack_Success_Rate_Feature_Stage{current_train_stage}': avg_attack_success_rate_feature if current_train_stage == 1 else float('nan'), # 阶段1报告特征攻击成功率
-        'Linf_Norm_Avg': avg_linf_norm,
-        'L2_Norm_Avg': avg_l2_norm,
-        'Discriminator_Real_Score_Avg': avg_D_real_score,
-        'Discriminator_Fake_Score_Avg': avg_D_fake_score,
-        'PSNR_Avg': avg_psnr if calculate_perceptual else float('nan'), # 如果不计算感知指标，则为 NaN
-        'LPIPS_Avg': avg_lpips if calculate_perceptual else float('nan'),
-        'SSIM_Avg': avg_ssim if calculate_perceptual else float('nan'),
-    }
-
-    # 将模型设置回训练模式 (判别器通常也应该在训练模式)
-    if generator is not None:
+    print("Evaluation finished.")
+    # 恢复模型到训练模式 (如果它们本来是训练模式)
+    if generator is not None and current_train_stage == 1:
         generator.train() 
     if discriminator is not None:
         discriminator.train() 
-    # ATN 模型通常在训练期间保持评估模式，所以这里不改回 train()
-    # atn_model.eval() # 保持评估模式
+    atn_model.train() # 通常 ATN 在训练中是 eval 模式，但在训练脚本中它被 load 后就 set_eval() 了，这里为了对称恢复 generator/discriminator 状态而加，实际可能不需要
 
-    return metrics
+    return average_metrics # 返回平均指标字典
