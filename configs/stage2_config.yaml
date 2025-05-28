@@ -1,7 +1,5 @@
 # configs/stage2_config.yaml
 
-# 这个配置文件用于阶段二，需要继承或在命令行覆盖 stage1 的设置
-
 # 数据配置 (通常与阶段一相同)
 data:
   video_path: "data/videos/1392e8264d9904bfffe142421b784cbd.mp4"
@@ -11,72 +9,65 @@ data:
   height: 256
   width: 256
   num_workers: 4
-  use_mock_data: False
-  mock_num_samples: 100
 
 # 模型配置
 model:
   generator:
     in_channels: 3
     out_channels: 3
-    epsilon: 0.03
+    epsilon: 0.03 # 像素级攻击的扰动上限
     num_bottlenecks: 4
     base_channels: 32
   discriminator:
     type: "patchgan"
+    in_channels: 3
     base_channels: 64
   atn:
-    model_path: "models/full_atn/your_full_atn_model.pth" # ATN 完整模型路径
-    atn_in_channels: 3
-    atn_sequence_length: 5
-    atn_height: 256
-    atn_width: 256
-    atn_num_heads: 4
+    # 1. 指向真实的权重文件
+    model_path: "models/full_atn/iris_transformers_ac_5_ce_4bn_20f_best.pth"
+    
+    # 2. (新增) IrisBabelModel 初始化所需的参数
+    memory_length: 1024
+    num_mid_dim: 512
+    num_actions: 5
+    num_targets: 20
+    
+    # 3. (新增) 合成决策图所需的尺寸信息
+    # 你的数据尺寸是 256x256，但决策图可能是在一个更小的特征图上产生的。
+    # 你需要和开发者确认决策坐标(x,y)对应的特征图尺寸。这里先假设是 81x81。
+    decision_map_height: 81
+    decision_map_width: 81
 
 # 训练配置
 training:
-  train_stage: 2 # 阶段二：完整决策/注意力攻击
-  batch_size: 4
-  num_epochs: 100 # 阶段二的 epoch 数量，可以更多
-  lr_g: 0.0001 # 学习率可能需要调整
+  train_stage: 2
+  batch_size: 1 # 从一个较小的值开始，以防显存溢出
+  num_epochs: 100
+  lr_g: 0.0001
   lr_d: 0.0001
   b1: 0.5
   b2: 0.999
   seed: 42
   device: "cuda"
-  generator_weights_path: "checkpoints/stage1/checkpoint_epoch_50_stage_1.pth" # 从阶段一训练好的生成器权重开始
-  discriminator_weights_path: "checkpoints/stage1/checkpoint_epoch_50_stage_1.pth" # 从阶段一训练好的判别器权重开始
+  
+  # 4. (关键修改) 禁用阶段一权重的加载
+  generator_weights_path: null
+  discriminator_weights_path: null
+  resume_checkpoint: null
+  
   eval_interval: 5
-  eval_success_threshold: 0.1
-  success_criterion: 'mse_diff_threshold' # 评估成功标准，阶段二重点看决策/注意力成功率
-  num_eval_samples: 100
+  dynamic_gan_balance:
+    enabled: true
+    # ... (其他动态平衡参数可以沿用 stage1 的)
 
 # 损失配置
 losses:
   gan_type: "lsgan"
-  decision_loss_type: "mse" # 决策图损失
-  attention_loss_type: "topk" # 注意力损失，例如 'topk' 或 'mse'
-  decision_loss_weight: 1.0 # 阶段二启用决策图损失
-  attention_loss_weight: 1.0 # 阶段二启用注意力损失
-  topk_k: 10 # 用于 Top-K 注意力损失 / 评估标准
+  decision_loss_type: "mse"
+  attention_loss_type: "kl_div" # 或 "topk"
+  decision_loss_weight: 1.0 # 启用决策损失
+  attention_loss_weight: 1.0 # 启用注意力损失
+  topk_k: 10
+  gan_loss_weight: 1.0
 
-# 正则化配置 (同阶段一)
-regularization:
-  lambda_l_inf: 1.0
-  lambda_l2: 0.001
-  lambda_tv: 0.0001
-  lambda_l2_penalty: 0.001
-
-# 掩码配置 (如果你的 ATN 有区域掩码)
-mask:
-  use_region_mask: False
-
-# 日志配置
-logging:
-  log_dir: "runs/stage2_train" # 阶段二的日志目录
-  checkpoint_dir: "checkpoints/stage2" # 阶段二的检查点目录
-  log_interval: 10
-  vis_interval: 50
-  num_vis_samples: 4
-  sequence_step_to_vis: 0
-  num_vis_heads: 1 
+# ... (其他配置，如 logging, regularization，可以暂时沿用 stage1 的)

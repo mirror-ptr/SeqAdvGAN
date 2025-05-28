@@ -47,23 +47,23 @@ if __name__ == '__main__':
     out.release()
     cv2.destroyAllWindows()
 
-def calculate_transform_matrix(json_file):
+def calculate_transform_matrix(json_file, padding=(0, 1, 1, 0)):
     level_data = json.load(
         open(json_file, encoding="utf-8"))
     level = Level(level_data)
     w = level.get_width()
     h = level.get_height()
-    left_top = ((0 - 0.5) - (w - 1) / 2.0,
-                (h - 1) / 2.0 - (0 - 0.5),
+    left_top = ((padding[3] - 0.5) - (w - 1) / 2.0,
+                (h - 1) / 2.0 - (padding[0] - 0.5),
                 0)
-    right_top = ((w - 2 + 0.5) - (w - 1) / 2.0,
-                 (h - 1) / 2.0 - (0 - 0.5),
+    right_top = ((w - padding[1] - 1 + 0.5) - (w - 1) / 2.0,
+                 (h - 1) / 2.0 - (padding[0] - 0.5),
                  0)
-    left_bottom = ((0 - 0.5) - (w - 1) / 2.0,
-                   (h - 1) / 2.0 - (h - 2 + 0.5),
+    left_bottom = ((padding[3] - 0.5) - (w - 1) / 2.0,
+                   (h - 1) / 2.0 - (h - 1 - padding[2] + 0.5),
                    0)
-    right_bottom = ((w - 2 + 0.5) - (w - 1) / 2.0,
-                    (h - 1) / 2.0 - (h - 2 + 0.5),
+    right_bottom = ((w - padding[1] - 1 + 0.5) - (w - 1) / 2.0,
+                    (h - 1) / 2.0 - (h - 1 - padding[2] + 0.5),
                     0)
     left_top = TileCalc2.world_to_screen(level, left_top, False, width=1920, height=1080)
     right_top = TileCalc2.world_to_screen(level, right_top, False, width=1920, height=1080)
