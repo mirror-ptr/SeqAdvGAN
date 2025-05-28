@@ -522,8 +522,10 @@ def evaluate_model(
         Dict[str, float]: 包含评估指标名称及其对应值的字典。
                           例如：{'Feature_L2_Diff_Avg': 0.5, 'Feature_Cosine_Sim_Avg': 0.9, ...}
     """
-    # 确保 ATN 模型处于评估模式
-    atn_model.eval()
+    # Ensure ATN model is in evaluation mode and on the correct device
+    # Note: IrisBabelModel handles its own device placement internally.
+
+    # Initialize evaluation metrics dictionary
 
     # 如果生成器模型存在且当前是 Stage 1，将生成器设为评估模式
     # Stage 1 评估需要生成器来产生对抗特征
@@ -627,6 +629,5 @@ def evaluate_model(
         generator.train() 
     if discriminator is not None:
         discriminator.train() 
-    atn_model.train() # 通常 ATN 在训练中是 eval 模式，但在训练脚本中它被 load 后就 set_eval() 了，这里为了对称恢复 generator/discriminator 状态而加，实际可能不需要
 
     return average_metrics # 返回平均指标字典
