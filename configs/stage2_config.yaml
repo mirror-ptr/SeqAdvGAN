@@ -10,6 +10,7 @@ data:
   width: 256
   num_workers: 4
   use_mock_data: false
+  mock_num_samples: 100
 
 # 模型配置
 model:
@@ -49,7 +50,7 @@ model:
 training:
   train_stage: 2
   batch_size: 1 # 从一个较小的值开始，以防显存溢出
-  num_epochs: 1
+  num_epochs: 10
   lr_g: 0.0005
   lr_d: 0.0005
   b1: 0.5
@@ -63,9 +64,19 @@ training:
   resume_checkpoint: null
   
   eval_interval: 5
+  save_interval: 5
   dynamic_gan_balance:
     enabled: true
-  # ... (其他动态平衡参数可以沿用 stage1 的)
+    strategy: "loss_ratio_freq_adjust"
+    freq_adjust_interval: 100
+    initial_D_freq: 1
+    initial_G_freq: 1
+    D_dominant_threshold: 2.0
+    G_dominant_threshold: 0.5
+    lr_adjust_factor: 0.9
+    min_lr: 1e-6
+    max_lr: 1e-3
+    loss_history_window: 50
 
 # 损失配置
 losses:
@@ -77,15 +88,31 @@ losses:
   topk_k: 10
   gan_loss_weight: 1.0
 
+# 正则化配置 (从 Stage 1 复制)
+regularization:
+  lambda_l_inf: 1.0
+  lambda_l2: 0.0
+  lambda_tv: 0.0
+  lambda_l2_penalty: 0.001
+
+# 掩码配置 (如果你的 ATN 有区域掩码) (从 Stage 1 复制)
+mask:
+  use_region_mask: False
+  # decision_mask_path: "resources/masks/decision_mask.png"
+  # attention_mask_path: "resources/masks/attention_mask.npy"
+
 # 添加 evaluation 配置
 evaluation:
   num_eval_samples: 32 # 评估时使用的样本数量/批次大小
-  eval_interval: 5 # 每隔多少个 epoch 进行一次评估
+  eval_interval: 50 # 每隔多少个 epoch 进行一次评估
+  success_threshold: 0.1
+  success_criterion: "mse_diff_threshold"
 
 # 日志配置
 logging:
   log_dir: "runs/stage2_train" # 或者保留 default_train
   log_interval: 10 # 每隔 10 步记录一次损失
-  vis_interval: 50 # 每隔 50 步可视化一次样本
+  vis_interval: 100 # 每隔 100 步可视化一次样本 (可以减小间隔以便调试)
   num_vis_samples: 4
   sequence_step_to_vis: 0
+  num_vis_heads: 1 # 添加可视化注意力头数量的配置

@@ -517,11 +517,11 @@ def train(cfg: Any) -> None: # 使用 Any 类型提示 cfg，因为它通常是 
                      visualize_decision_diff=True # Visualize decision map difference in Stage 2
                  )
 
-                 # Visualize attention maps
+                 # 可视化注意力图
                  visualize_attention_maps(
-                     writer,
-                     original_attention_matrix=original_attention_map_vis.detach().cpu() if original_attention_map_vis is not None else None,
-                     adversarial_attention_matrix=adversarial_attention_map_vis.detach().cpu() if adversarial_attention_map_vis is not None else None,
+                     writer, 
+                     attention_matrix_orig=original_atn_outputs.get('attention'), # 使用正确的参数名
+                     attention_matrix_adv=adversarial_atn_outputs.get('attention'),   # 使用正确的参数名
                      step=global_step,
                      num_samples=num_vis_samples,
                      num_heads_to_vis=cfg.logging.num_vis_heads # Use num_vis_heads from config
