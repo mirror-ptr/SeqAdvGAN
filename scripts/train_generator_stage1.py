@@ -420,22 +420,49 @@ def train(cfg: Any) -> None: # 使用 Any 类型提示 cfg，因为它通常是 
             # Ensure original_features requires grad for Generator training
             original_features_for_gen = original_features.clone().detach().requires_grad_(True)
 
-            # --- Train Discriminator ---
-            # 训练判别器的目标：使判别器能够区分真实的特征 (来自原始 ATN 输出) 和伪造的特征 (来自生成器输出)。
-            # Goal: Discriminator distinguishes real features (from original ATN) and fake features (from Generator)
+            # Reshape features from (B*N, D) to (B, D, N, 1, 1) for 3D CNN models
+            # where B is batch_size, N is sequence_length, D is num_mid_dim (512)
+            batch_size = real_x.shape[0]
+            sequence_length = real_x.shape[2]
+            feature_dim = original_features.shape[-1] # Should be 512
 
-            # 清除判别器优化器的梯度，为当前训练步骤做准备。
-            optimizer_D.zero_grad() # Clear gradients for Discriminator
+            # Check if reshaping is needed (features might already be 5D if ATN output changes)
+            if original_features_for_gen.ndim == 2:
+                original_features_for_gen = original_features_for_gen.view(batch_size, sequence_length, feature_dim)
+                # Permute to (B, D, N, H, W) format expected by 3D CNNs
+                # Assume H=1, W=1 for this reshaping
+                original_features_5d_gen = original_features_for_gen.permute(0, 2, 1).unsqueeze(-1).unsqueeze(-1)
+                print(f"Debug: Reshaped original_features_for_gen to 5D: {original_features_5d_gen.shape}")
+            else:
+                # Assume features are already in a compatible 5D format (B, C, N, H, W)
+                original_features_5d_gen = original_features_for_gen
+                print(f"Debug: original_features_for_gen is already 5D: {original_features_5d_gen.shape}")
 
-            # 获取判别器对真实特征的输出。
-            D_real_output = discriminator(original_features.detach()) # 判别器处理真实的特征张量
+            # 2. Generator generates delta in the feature space
+            # Debug print before calling generator
+            print(f"Debug: Epoch {epoch}, Batch {i} - Before generator forward, original_features_5d_gen shape: {original_features_5d_gen.shape}")
+            delta = generator(original_features_5d_gen)
+            print(f"Debug: Epoch {epoch}, Batch {i} - After generator forward, delta shape: {delta.shape}")
+
+            # 3. Calculate adversarial features
+            adversarial_features = original_features_5d_gen + delta # This needs to be corrected, should add delta to 5D features
+            print(f"Debug: Epoch {epoch}, Batch {i} - Calculated adversarial_features, shape: {adversarial_features.shape}")
+
+            #############################
+            # Train Discriminator (on features)
+            #############################
+            optimizer_D.zero_grad()
+            print(f"Debug: Epoch {epoch}, Batch {i} - Discriminator optimizer zero_grad.")
+
+            # Debug print before Discriminator forward pass (real)
+            print(f"Debug: Epoch {epoch}, Batch {i} - Before Discriminator forward (real), input shape: {original_features_5d_gen.detach().shape}")
+            D_real_output = discriminator(original_features_5d_gen.detach()) # Pass detached 5D features
+            print(f"Debug: Epoch {epoch}, Batch {i} - After Discriminator forward (real), output shape: {D_real_output.shape}")
 
             # 生成伪造特征：原始特征 + 生成器产生的扰动。
             with torch.no_grad(): # 确保在判别器训练时，梯度不会通过生成器反向传播
-                 # 生成扰动 delta，输入是原始特征的副本 (已分离)
-                 delta_for_D = generator(original_features_for_gen.detach()) # 生成 delta
-                 # 计算用于判别器训练的对抗特征
-                 adversarial_features_for_D = original_features.detach() + delta_for_D
+                # Use the already calculated delta from Generator step
+                adversarial_features_for_D = original_features_5d_gen.detach() + delta.detach() # Add detached delta to detached original 5D features
 
             # 获取判别器对伪造特征的输出。
             D_fake_output_detached = discriminator(adversarial_features_for_D)
@@ -444,11 +471,11 @@ def train(cfg: Any) -> None: # 使用 Any 类型提示 cfg，因为它通常是 
             d_total_loss, d_real_loss, d_fake_loss = gan_losses.discriminator_loss(D_real_output, D_fake_output_detached)
 
             # 根据动态平衡策略或固定频率，判断是否更新判别器的参数。
-            if global_step % current_D_freq == 0:
+            if dynamic_balance_enabled and (global_step % current_D_freq == 0):
                  # 计算判别器损失的梯度。
                  d_total_loss.backward()
                  # 根据梯度更新判别器的参数。
-                 optimizer_D.step() # 更新判别器参数
+                 optimizer_D.step() # Update Discriminator parameters
 
             # --- Train Generator ---
             # 训练生成器的目标：
@@ -460,10 +487,10 @@ def train(cfg: Any) -> None: # 使用 Any 类型提示 cfg，因为它通常是 
             optimizer_G.zero_grad() # 清除生成器参数的梯度
 
             # 生成扰动，这一次需要确保梯度能够从生成器的输出反向传播到生成器的参数。
-            delta = generator(original_features_for_gen) # 生成扰动，梯度会流经 generator
+            delta = generator(original_features_5d_gen) # 生成扰动，梯度会流经 generator
 
             # 计算用于生成器训练的对抗特征。
-            adversarial_features = original_features_for_gen + delta
+            adversarial_features = original_features_5d_gen + delta
 
             # 获取判别器对这些对抗特征的输出，用于计算生成器的 GAN 损失。
             D_fake_output_for_G_train = discriminator(adversarial_features)

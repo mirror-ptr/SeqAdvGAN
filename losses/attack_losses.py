@@ -70,6 +70,12 @@ class AttackLosses:
              # 返回一个设备正确的零张量并继续
              return torch.tensor(0.0, device=self.device)
 
+        # 压缩掉大小为 1 的维度，将 (B, 1, 1, H, W) 变为 (B, H, W)
+        if original_out.ndim == 5:
+            original_out = original_out.squeeze(1).squeeze(1)
+        if adversarial_out.ndim == 5:
+            adversarial_out = adversarial_out.squeeze(1).squeeze(1)
+
         # 假设决策图形状是 (B, H, W)
         assert original_out.ndim == 3, f"Decision map is expected to be 3D (B, H, W), got {original_out.ndim}D"
         B, H, W = original_out.shape
