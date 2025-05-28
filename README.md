@@ -8,8 +8,8 @@
 
 * **阶段一 (Phase 1)：特征层攻击**
     * 在这一阶段，我们着重于攻击 ATN 的**特征提取层**。通过生成精心设计的微小扰动，我们致力于最大化对抗样本在 ATN 特征提取器中产生的特征表示与原始样本特征表示之间的差异，从而使 ATN 无法正确识别原始的特征模式。
-* **阶段二 (Phase 2)：注意力机制攻击**
-    * 在成功完成第一阶段的基础上，我们将进一步探索如何直接操纵 ATN 的**显式序列注意力权重和最终决策图**。这一阶段将引入针对这些特定输出的攻击损失，旨在更精准地控制 AI 的决策逻辑和其注意力聚焦区域。
+* **阶段二 (Phase 2)：决策图和注意力机制攻击**
+    * 在成功完成第一阶段的基础上，我们将进一步探索如何直接操纵 ATN 的**最终决策图和显式序列注意力权重**。这一阶段将引入针对这些特定输出的攻击损失，旨在更精准地控制 AI 的决策逻辑和其注意力聚焦区域。
 
 与传统的图像对抗攻击不同，本项目聚焦于 **序列图像数据** 和具有 **注意力机制** 的复杂 AI 模型。我们不仅尝试改变最终决策，更深入探索如何 **操纵 ATN 的内部注意力聚焦区域**，这对于理解、评估和增强基于注意力的模型在对抗环境下的鲁棒性具有重要意义。
 
@@ -24,9 +24,9 @@
 * **🛡️ 灵活的 GAN 训练框架:**
     * 采用类似 AdvGAN 的生成对抗网络框架进行训练，支持 **多种 GAN 损失类型 (如 BCE、LSGAN)**。
     * 通过 **可插拔的判别器模块 (CNN Discriminator, PatchGAN Discriminator)** 设计，增强框架灵活性，便于探索不同判别器结构对生成器训练的影响。
-* **🎯 创新的注意力感知攻击策略（分阶段实现）:**
+* **🎯 创新的分阶段攻击策略:**
     * **阶段一 (Phase 1): 特征层攻击:** 通过在 ATN 特征提取层最大化对抗样本与原始样本的特征输出差异来误导模型，旨在使 ATN 无法识别原始的特征模式。
-    * **阶段二 (Phase 2): 注意力机制攻击:** 在第一阶段成功的基础上，进一步引入针对 ATN 决策图和序列注意力矩阵的攻击损失，以直接操纵 AI 的决策和其内部注意力聚焦。
+    * **阶段二 (Phase 2): 决策图和注意力机制攻击:** 在第一阶段成功的基础上，进一步引入针对 ATN 最终决策图和序列注意力矩阵的攻击损失，以直接操纵 AI 的决策和其内部注意力聚焦。
 * **⚖️ 全面的正则化损失:**
     * 集成 **L2 范数惩罚** 和 **Total Variation (TV) Loss**，有效约束生成扰动的大小和空间平滑性，从而提高对抗样本的隐蔽性和自然度。
 * **📊 详细的评估体系:**
@@ -101,6 +101,7 @@ SeqAdvGAN/
         ```
         *(注: `piq` 用于计算感知指标 LPIPS/SSIM, `tqdm` 用于显示进度条)*
         *（提示: `piq` 库可能存在版本兼容性问题，建议查阅其文档或尝试已测试版本，例如 0.8.0 或更高版本，以确保评估指标能正常计算。）*
+    **重要提示：** 请确保以上所有依赖库都安装在您将用于运行训练和 TensorBoard 的同一个 **conda/虚拟环境** 中。激活环境后，通常可以直接使用 `python` 或已安装的可执行文件（如 `tensorboard`）。如果遇到 `ModuleNotFoundError` 或找不到命令的问题，这通常意味着您当前使用的 Python 解释器或命令路径不正确。此时，尝试使用虚拟环境中 Python 解释器的完整路径来运行脚本或模块（例如，`/path/to/your/conda/envs/your_env/bin/python your_script.py` 或 `/path/to/your/conda/envs/your_env/bin/tensorboard --logdir ...`）。
 5.  **克隆项目仓库:**
     ```bash
     git clone https://github.com/mirror-ptr/SeqAdvGAN.git
@@ -124,9 +125,14 @@ python scripts/train_generator.py --config configs/stage1_config.yaml
 训练监控: 训练过程中的日志、模型检查点和 TensorBoard 可视化数据将保存到 runs/ 和 checkpoints/ 目录下（可在配置文件中调整）。
 
 实时查看训练进度: 您可以使用 TensorBoard 实时监控训练进度和可视化结果。在另一个终端中，导航到您的项目根目录，然后运行：
-
+ 
 ```bash
-tensorboard --logdir runs/stage1_train # 或者您在 config 中设置的 logging.log_dir
+tensorboard --logdir runs/stage1_train # 或在 config 中设置的 logging.log_dir
+```
+
+**重要提示：** 如果直接运行 `tensorboard` 命令遇到问题（例如 `ModuleNotFoundError`），请尝试使用虚拟环境中可执行文件的完整路径，例如：
+```bash
+/home/xianke/miniconda3/envs/seqadvgan_env/bin/tensorboard --logdir runs/stage1_train # 将路径替换为您实际的环境路径
 ```
 
 ### 4. 训练参数配置
@@ -140,9 +146,24 @@ tensorboard --logdir runs/stage1_train # 或者您在 config 中设置的 loggin
 *   `losses.decision_loss_weight`: 特征层攻击损失的权重（第一阶段主要关注此项）。
 *   `regularization.lambda_l_inf`, `lambda_l2`, `lambda_tv`, `lambda_l2_penalty`: 各种正则化项的权重，用于约束扰动质量。
 
+**重要提示：** 请确保您使用的配置文件（例如 `configs/stage1_config.yaml` 或 `configs/stage2_config.yaml`）包含了脚本所需的所有必要参数，特别是：
+- ATN 模型加载相关的参数（在 `model.atn` 部分，例如 `model_path`, `memory_length`, `num_mid_dim`, `num_actions`, `num_targets`, 以及新增的 `atn_in_channels`, `atn_sequence_length`, `atn_height`, `atn_width`, `atn_num_heads`）。
+- 数据加载相关的参数（在 `data` 部分，例如 `video_path`, `level_json_path`, `sequence_length`, `channels`, `height`, `width`, `num_workers`, 以及新增的 `use_mock_data`）。
+- 评估相关的参数（新增的 `evaluation` 部分，例如 `num_eval_samples`, `eval_interval`）。
+缺失或错误的参数可能导致 `AttributeError` 或其他运行时错误。
+
 更多详细配置请参考 `configs/stage1_config.yaml` 文件。
 
 **注意:** 如果训练过程中遇到 `Killed` 错误，通常是显存或内存不足，请 **显著减小 `--batch_size`**。
+
+### 开始训练 (第二阶段：决策图和注意力机制攻击)
+
+运行以下命令开始 SeqAdvGAN 的第二阶段训练。请确保 `configs/stage2_config.yaml` 配置正确，特别是 ATN 模型路径指向完整的 ATN 模型权重。
+
+```bash
+python scripts/train_generator.py --config configs/stage2_config.yaml
+```
+第二阶段的训练目标是攻击 ATN 的决策图和注意力机制，相关的损失函数和评估指标权重需要在 `configs/stage2_config.yaml` 中配置（例如 `losses.decision_loss_weight` 和 `losses.attention_loss_weight` ）。
 
 ### 📈 可视化结果 (`scripts/visualize_results.py`)
 

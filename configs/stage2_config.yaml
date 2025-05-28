@@ -9,6 +9,7 @@ data:
   height: 256
   width: 256
   num_workers: 4
+  use_mock_data: false
 
 # 模型配置
 model:
@@ -31,6 +32,12 @@ model:
     num_mid_dim: 512
     num_actions: 5
     num_targets: 20
+    # (新增) ATN 模型输入形状和结构参数
+    atn_in_channels: 3
+    atn_sequence_length: 5
+    atn_height: 256
+    atn_width: 256
+    atn_num_heads: 8
     
     # 3. (新增) 合成决策图所需的尺寸信息
     # 你的数据尺寸是 256x256，但决策图可能是在一个更小的特征图上产生的。
@@ -42,9 +49,9 @@ model:
 training:
   train_stage: 2
   batch_size: 1 # 从一个较小的值开始，以防显存溢出
-  num_epochs: 100
-  lr_g: 0.0001
-  lr_d: 0.0001
+  num_epochs: 1
+  lr_g: 0.0005
+  lr_d: 0.0005
   b1: 0.5
   b2: 0.999
   seed: 42
@@ -58,16 +65,27 @@ training:
   eval_interval: 5
   dynamic_gan_balance:
     enabled: true
-    # ... (其他动态平衡参数可以沿用 stage1 的)
+  # ... (其他动态平衡参数可以沿用 stage1 的)
 
 # 损失配置
 losses:
   gan_type: "lsgan"
   decision_loss_type: "mse"
-  attention_loss_type: "kl_div" # 或 "topk"
-  decision_loss_weight: 1.0 # 启用决策损失
+  attention_loss_type: "topk" # 或 "kl_div"
+  decision_loss_weight: 500.0 # 启用决策损失
   attention_loss_weight: 1.0 # 启用注意力损失
   topk_k: 10
   gan_loss_weight: 1.0
 
-# ... (其他配置，如 logging, regularization，可以暂时沿用 stage1 的)
+# 添加 evaluation 配置
+evaluation:
+  num_eval_samples: 32 # 评估时使用的样本数量/批次大小
+  eval_interval: 5 # 每隔多少个 epoch 进行一次评估
+
+# 日志配置
+logging:
+  log_dir: "runs/stage2_train" # 或者保留 default_train
+  log_interval: 10 # 每隔 10 步记录一次损失
+  vis_interval: 50 # 每隔 50 步可视化一次样本
+  num_vis_samples: 4
+  sequence_step_to_vis: 0

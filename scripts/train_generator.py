@@ -108,25 +108,14 @@ def train(cfg: Any) -> None: # 使用 Any 类型提示 cfg，因为它通常是 
          sys.exit(1)
 
     atn_model = load_atn_model(
-        model_path=cfg.model.atn.model_path, # ATN 模型权重文件的路径
-        device=device, # 将模型加载到指定的计算设备
-        in_channels=cfg.model.atn.atn_in_channels, # ATN 模型期望的输入通道数 (通常是原始图像通道，例如 3)
-        sequence_length=cfg.model.atn.atn_sequence_length, # ATN 模型期望的输入序列长度
-        height=cfg.model.atn.atn_height, # ATN 模型期望的输入高度
-        width=cfg.model.atn.atn_width, # ATN 模型期望的输入宽度
-        num_heads=cfg.model.atn.atn_num_heads # ATN 模型注意力头部数量
-        # TODO: 考虑是否需要 load_feature_head_only 参数，以及如何根据 Stage 1/2 加载不同部分。
-        #      例如， Stage 1 可能只需要特征提取部分，Stage 2 需要整个模型。
-        #      目前 load_atn_model 会尝试加载整个模型并返回 nn.Module。
+        cfg=cfg,
+        device=device
     )
 
     # 检查 ATN 模型是否加载成功
     if atn_model is None:
         print(f"Error: Failed to load ATN model from {cfg.model.atn.model_path}. Exiting training.")
         sys.exit(1) # 如果加载失败，退出脚本
-    # 将加载的 ATN 模型移动到指定设备，并设置为评估模式 (不计算梯度)
-    atn_model.eval() # ATN 模型在 GAN 训练期间保持评估模式
-    atn_model.to(device) # 确保 ATN 模型在正确的设备上
     print("ATN model loaded successfully and frozen.") # 明确指出模型已冻结
 
     # --- 2. Initialize Generator and Discriminator Models ---
@@ -166,11 +155,32 @@ def train(cfg: Any) -> None: # 使用 Any 类型提示 cfg，因为它通常是 
     # 阶段 2 的模型配置：
     # TODO: 阶段 2 模型初始化。Generator 输入可能是原始图像，输出图像扰动。Discriminator 输入也可能是图像或处理后的图像。
     elif cfg.training.train_stage == 2:
-        # TODO: 实现阶段 2 的生成器和判别器模型初始化逻辑。
-        # Stage 2 Generator might need different architecture (e.g., takes image input)
-        # Stage 2 Discriminator might need different architecture (e.g., takes image input)
-        print("Stage 2 model initialization not yet fully implemented.")
-        sys.exit(1)
+        print("Initializing Stage 2 models...")
+        # Stage 2 Generator takes image input and outputs image perturbation
+        generator = Generator(
+            in_channels=cfg.model.generator.in_channels, # Generator 输入通道数 (应与原始图像通道数匹配)
+            out_channels=cfg.model.generator.out_channels, # Generator 输出通道数 (应与原始图像通道数匹配)
+            num_bottlenecks=cfg.model.generator.num_bottlenecks,
+            base_channels=cfg.model.generator.base_channels,
+            epsilon=cfg.model.generator.epsilon # 像素级扰动上限
+        ).to(device)
+
+        # Stage 2 Discriminator takes adversarial image as input
+        if cfg.model.discriminator.type == 'cnn':
+            discriminator = SequenceDiscriminatorCNN(
+                in_channels=cfg.model.discriminator.in_channels, # Discriminator 输入通道数 (应与原始图像通道数匹配)
+                base_channels=cfg.model.discriminator.base_channels
+            ).to(device)
+            print("Using CNN Discriminator for Stage 2")
+        elif cfg.model.discriminator.type == 'patchgan':
+             discriminator = PatchDiscriminator3d(
+                  in_channels=cfg.model.discriminator.in_channels, # Discriminator 输入通道数 (应与原始图像通道数匹配)
+                  base_channels=cfg.model.discriminator.base_channels
+             ).to(device)
+             print("Using PatchGAN Discriminator for Stage 2")
+        else:
+            print(f"Error: Unsupported discriminator type for Stage 2: {cfg.model.discriminator.type}. Supported types are 'cnn' and 'patchgan'.")
+            sys.exit(1)
 
     print("Generator and Discriminator models initialized.")
 
@@ -397,9 +407,7 @@ def train(cfg: Any) -> None: # 使用 Any 类型提示 cfg，因为它通常是 
                  original_atn_outputs = get_atn_outputs(
                       atn_model,
                       real_x, # 传递原始图像数据作为 ATN 的输入 (形状: B, C_img, T, H_img, W_img)
-                      return_features=True, # 获取特征层输出
-                      return_decision=False, # Stage 1 训练中不主要关注决策图，设为 False
-                      return_attention=False # Stage 1 训练中不主要关注注意力图，设为 False
+                      cfg=cfg # 传递配置对象
                   )
             # original_features 的形状大约是 (B, C_feat, N_feat, H_feat, W_feat)，取决于 ATN 特征提取器的输出。
             original_features = original_atn_outputs.get('features')
