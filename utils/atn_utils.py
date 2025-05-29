@@ -2,65 +2,59 @@ import torch
 import torch.nn as nn
 from typing import Dict, Optional, Any
 import os
-import traceback # Import traceback
+import traceback # 导入 traceback 用于错误追踪
 
-# 导入实际使用的模型组件
+# 从 IrisBabel 导入实际使用的模型组件
 try:
     # 确保这些导入路径正确，根据您的项目结构
     from IrisBabel.nn.Transformers import IrisAttentionTransformers
     from IrisBabel.nn.CNN import IrisTriggerNet
-    # Import IrisXeonNet
-    from IrisBabel.nn.CNN import IrisXeonNet # Import IrisXeonNet
-    print("Successfully imported IrisAttentionTransformers, IrisTriggerNet, and IrisXeonNet.")
-    # Placeholder classes in case import fails - allows graceful failure during development
+    # 导入 IrisXeonNet (感知层)
+    from IrisBabel.nn.CNN import IrisXeonNet # 导入 IrisXeonNet
+    print("成功导入 IrisAttentionTransformers, IrisTriggerNet 和 IrisXeonNet。")
+    # 导入失败时的占位符类 - 允许在开发期间优雅失败
     _AttentionTransformer = IrisAttentionTransformers
     _TriggerNet = IrisTriggerNet
-    _XeonNet = IrisXeonNet # Placeholder for IrisXeonNet
+    _XeonNet = IrisXeonNet # IrisXeonNet 的占位符
 except ImportError as e:
-    print(f"FATAL: Error importing actual ATN model components: {e}")
-    print("Please ensure the 'IrisBabel' directory and its submodules are correctly placed in the SeqAdvGAN project root and that necessary dependencies are installed.")
-    # Define dummy classes to prevent NameError if import fails
+    print(f"致命错误：导入实际 ATN 模型组件失败：{e}")
+    print("请确保 'IrisBabel' 目录及其子模块正确放置在 SeqAdvGAN 项目根目录下，并且已安装必要的依赖项。")
+    # 定义虚拟（Dummy）类以防止导入失败时出现 NameError
     class _AttentionTransformer(nn.Module):
-        def __init__(self, *args, **kwargs): super().__init__(); print("Dummy AttentionTransformer used due to import error.")
-        def forward(self, x): 
-             # Simulate output shape (B, H', W', 128) after squeeze(1) based on test.py
-             # Assuming input x is (B, 128, T, H', W') and T=1 after Perception Layer
-             # The test.py logic with squeeze(1) suggests T=1
-             # Need to know H', W' from IrisXeonNet output
-             # Let's assume IrisXeonNet output shape is (B, 128, 1, 64, 64)
-             # After AttentionTransformer, it might be (B, 1, 64*64, 128) -> squeeze(1) -> (B, 4096, 128)
-             # This is complex, let's return a plausible shape that TriggerNet might accept
-             # Based on test.py, AttentionTransformer output fed to TriggerNet seems to be (B, T, H, W, C)
-             # If IrisXeonNet output is (B, 128, T, H', W')
-             # AttentionTransformer input should be (B, 128, T, H', W')
-             # AttentionTransformer output shape is unclear but used as second input to TriggerNet
-             # TriggerNet first input is data (B, T, H, W, C)
-             # Let's assume AttentionTransformer output matches TriggerNet second input shape (B, T, H', W', C)
-             # This contradicts BatchNorm3d(128). This is still highly uncertain.
-             # Let's simulate a feature shape that could be an intermediate output
-             print("Warning: Dummy AttentionTransformer forward pass returning dummy features.")
-             return torch.randn(*x.shape[:-3], 128, *x.shape[-2:], device=x.device) # Simulate (B, 128, T, H', W') output if input is (B, 128, T, H', W')
+        def __init__(self, *args, **kwargs): super().__init__(); print("由于导入错误，使用了虚拟 AttentionTransformer。")
+        def forward(self, x):
+             # 警告：虚拟 AttentionTransformer forward 方法返回虚拟特征。
+             print("警告：虚拟 AttentionTransformer forward 方法返回虚拟特征。")
+             # 模拟一个合理的输出形状 (B, 128, T, H', W')
+             if x.ndim == 5:
+                 return torch.randn(x.shape[0], 128, x.shape[2], x.shape[3]//4, x.shape[4]//4, device=x.device)
+             else:
+                 return torch.empty(0) # 返回空张量或根据需要调整
 
     class _TriggerNet(nn.Module):
-        def __init__(self, *args, **kwargs): super().__init__(); print("Dummy TriggerNet used due to import error.")
-        def forward(self, x, weight_matrix): 
-            # Simulate output shape based on test.py squeeze(0) -> (H', W', 8)
-            # Assuming input x is (B, T, H, W, C) and weight_matrix is AttentionTransformer output
-            # Let's assume TriggerNet output is (B, H', W', 8)
-            print("Warning: Dummy TriggerNet forward pass returning dummy output.")
-            # Need H', W' from somewhere, potentially config or derived from input x
-            # Assuming x is (B, T, H, W, C), let's use H, W as H', W'
-            return torch.randn(x.shape[0], x.shape[2], x.shape[3], 8, device=x.device) # Simulate (B, H, W, 8)
+        def __init__(self, *args, **kwargs): super().__init__(); print("由于导入错误，使用了虚拟 TriggerNet。")
+        def forward(self, x, weight_matrix):
+            # 警告：虚拟 TriggerNet forward 方法返回虚拟输出。
+            print("警告：虚拟 TriggerNet forward 方法返回虚拟输出。")
+            # 模拟一个合理的输出形状 (B, H', W', 8) 或 (B, 8)
+            if x.ndim == 5:
+                 return torch.randn(x.shape[0], x.shape[3]//4, x.shape[4]//4, 8, device=x.device) # 模拟 (B, H'/4, W'/4, 8)
+            elif x.ndim == 2: # 如果输入是 (B, features)
+                 return torch.randn(x.shape[0], 8, device=x.device) # 模拟 (B, 8)
+            else:
+                 return torch.empty(0) # 返回空张量或根据需要调整
 
     class _XeonNet(nn.Module):
-        def __init__(self, *args, **kwargs): super().__init__(); print("Dummy IrisXeonNet used due to import error.")
-        def forward(self, x): 
-            # Simulate output shape (B, 128, T, H', W')
-            # Input x is (B, 3, T, H, W)
-            # Need to know the downsampling factor for H, W
-            # Assuming 4x downsampling for simplicity, and T remains same
-            print("Warning: Dummy IrisXeonNet forward pass returning dummy features.")
-            return torch.randn(x.shape[0], 128, x.shape[2], x.shape[3]//4, x.shape[4]//4, device=x.device) # Simulate (B, 128, T, H/4, W/4)
+        def __init__(self, *args, **kwargs): super().__init__(); print("由于导入错误，使用了虚拟 IrisXeonNet。")
+        def forward(self, x):
+            # 模拟输出形状 (B, 128, T, H', W')
+            # 输入 x 是 (B, 3, T, H, W)
+            # 假设下采样率为 4x
+            print("警告：虚拟 IrisXeonNet forward 方法返回虚拟特征。")
+            if x.ndim == 5:
+                return torch.randn(x.shape[0], 128, x.shape[2], x.shape[3]//4, x.shape[4]//4, device=x.device) # 模拟 (B, 128, T, H/4, W/4)
+            else:
+                 return torch.empty(0) # 返回空张量或根据需要调整
 
 # 删除或注释掉旧的 IrisBabelModel 导入
 # try:
@@ -77,105 +71,98 @@ def load_atn_model(cfg: Any, device: torch.device) -> Optional[Dict[str, nn.Modu
     """
     加载并初始化 IrisXeonNet, IrisAttentionTransformers 和 IrisTriggerNet 模型。
     """
-    # Check if all required classes were imported successfully
+    # 检查是否所有必需的类都成功导入
     if _XeonNet is None or _AttentionTransformer is None or _TriggerNet is None:
-        print("Cannot load ATN models due to previous import errors.")
+        print("由于先前的导入错误，无法加载 ATN 模型。")
         return None
     
-    # Initialize models
-    print("Initializing IrisXeonNet, IrisAttentionTransformers and IrisTriggerNet models...")
+    # 初始化模型
+    print("正在初始化 IrisXeonNet, IrisAttentionTransformers 和 IrisTriggerNet 模型...")
     try:
-        # Initialize IrisXeonNet
-        # IrisXeonNet instantiation based on IrisBabel/nn/CNN/IrisXeonNet.py __init__
-        # Seems to only have num_classes=1000 parameter, which might not be relevant here.
-        # Let's instantiate without arguments for now, assuming default behavior.
-        # Note: If IrisXeonNet __init__ requires image dimensions or other config, add them here.
+        # 初始化 IrisXeonNet (感知层)
+        # IrisXeonNet 实例化（假设使用默认参数）
         xeon_net = _XeonNet().to(device)
-        print("IrisXeonNet initialized.")
+        print("IrisXeonNet 初始化完成。")
 
-        # Initialize IrisAttentionTransformers
-        # Instantiation based on test.py: axis_transformers = IrisAttentionTransformers()
-        # Seems to have optional inject_model parameter. Instantiate without it for now.
-        # Note: If IrisAttentionTransformers __init__ requires feature dimensions or other config, add them here.
+        # 初始化 IrisAttentionTransformers (注意力模块)
+        # 实例化（假设使用默认参数）
         attention_transformer_model = _AttentionTransformer().to(device)
-        print("IrisAttentionTransformers initialized.")
+        print("IrisAttentionTransformers 初始化完成。")
 
-        # Initialize IrisTriggerNet
-        # Instantiation based on test.py: trigger_net = IrisTriggerNet()
-        # Seems to have no parameters in __init__.
-        # Note: If IrisTriggerNet __init__ requires feature/attention dimensions or other config, add them here.
+        # 初始化 IrisTriggerNet (决策模块)
+        # 实例化（假设使用默认参数）
         trigger_net_model = _TriggerNet().to(device)
-        print("IrisTriggerNet initialized.")
+        print("IrisTriggerNet 初始化完成。")
 
     except Exception as e:
-         print(f"Error initializing ATN model components: {e}")
-         traceback.print_exc() # Print traceback for detailed error info
+         print(f"初始化 ATN 模型组件时出错：{e}")
+         traceback.print_exc() # 打印详细的错误信息
          return None
 
 
-    # Load pre-trained weights
-    print("Loading ATN model weights...")
-    # From config, get weight paths
-    # Need perception_layer_path, attention_transformer_path, and trigger_net_path
+    # 加载预训练权重
+    print("正在加载 ATN 模型权重...")
+    # 从配置中获取权重路径
+    # 需要 perception_layer_path, attention_transformer_path 和 trigger_net_path
     if not hasattr(cfg.model.atn, 'perception_layer_path') or \
        not hasattr(cfg.model.atn, 'attention_transformer_path') or \
        not hasattr(cfg.model.atn, 'trigger_net_path'):
-        print("Error: ATN model paths (perception_layer_path, attention_transformer_path, or trigger_net_path) are missing in the config.")
+        print("错误：配置中缺少 ATN 模型路径 (perception_layer_path, attention_transformer_path 或 trigger_net_path)。")
         return None
 
     perception_layer_path = cfg.model.atn.perception_layer_path
     attention_transformer_path = cfg.model.atn.attention_transformer_path
     trigger_net_path = cfg.model.atn.trigger_net_path
 
-    # Load IrisXeonNet weights
-    print(f"Loading IrisXeonNet weights from: {perception_layer_path}")
+    # 加载 IrisXeonNet 权重
+    print(f"正在从 {perception_layer_path} 加载 IrisXeonNet 权重")
     if os.path.exists(perception_layer_path):
         try:
-            # Loading weights, using weights_only=False and strict=False as seen in test.py
+            # 加载权重，使用 weights_only=False 和 strict=False (根据 test.py 中的加载方式)
             xeon_net.load_state_dict(
                 torch.load(perception_layer_path, map_location=device, weights_only=False),
                 strict=False
             )
-            print("IrisXeonNet weights loaded.")
+            print("IrisXeonNet 权重加载成功。")
         except Exception as e:
-             print(f"Warning: Error loading IrisXeonNet weights from {perception_layer_path}: {e}. Model will use random initialization.")
+             print(f"警告：从 {perception_layer_path} 加载 IrisXeonNet 权重时出错：{e}。模型将使用随机初始化。")
              traceback.print_exc()
     else:
-        print(f"Warning: IrisXeonNet weights not found at {perception_layer_path}. Model will use random initialization.")
+        print(f"警告：未找到 IrisXeonNet 权重文件 {perception_layer_path}。模型将使用随机初始化。")
 
-    # Load AttentionTransformer weights
-    print(f"Loading AttentionTransformer weights from: {attention_transformer_path}")
+    # 加载 AttentionTransformer 权重
+    print(f"正在从 {attention_transformer_path} 加载 AttentionTransformer 权重")
     if os.path.exists(attention_transformer_path):
         try:
-            # Loading weights, using weights_only=False and strict=False as seen in test.py
+            # 加载权重，使用 weights_only=False 和 strict=False (根据 test.py 中的加载方式)
             attention_transformer_model.load_state_dict(
                 torch.load(attention_transformer_path, map_location=device, weights_only=False),
-                strict=False # According to test.py loading
+                strict=False # 根据 test.py 中的加载方式
             )
-            print("AttentionTransformer weights loaded.")
+            print("AttentionTransformer 权重加载成功。")
         except Exception as e:
-             print(f"Warning: Error loading AttentionTransformer weights from {attention_transformer_path}: {e}. Model will use random initialization.")
+             print(f"警告：从 {attention_transformer_path} 加载 AttentionTransformer 权重时出错：{e}。模型将使用随机初始化。")
              traceback.print_exc()
     else:
-        print(f"Warning: AttentionTransformer weights not found at {attention_transformer_path}. Model will use random initialization.")
+        print(f"警告：未找到 AttentionTransformer 权重文件 {attention_transformer_path}。模型将使用随机初始化。")
 
-    # Load TriggerNet weights
-    print(f"Loading TriggerNet weights from: {trigger_net_path}")
+    # 加载 TriggerNet 权重
+    print(f"正在从 {trigger_net_path} 加载 TriggerNet 权重")
     if os.path.exists(trigger_net_path):
         try:
-            # Loading weights, using weights_only=False and strict=False as seen in test.py
+            # 加载权重，使用 weights_only=False 和 strict=False (根据 test.py 中的加载方式)
             trigger_net_model.load_state_dict(
                 torch.load(trigger_net_path, map_location=device, weights_only=False),
-                strict=False # According to test.py loading
+                strict=False # 根据 test.py 中的加载方式
             )
-            print("TriggerNet weights loaded.")
+            print("TriggerNet 权重加载成功。")
         except Exception as e:
-             print(f"Warning: Error loading TriggerNet weights from {trigger_net_path}: {e}. Model will use random initialization.")
+             print(f"警告：从 {trigger_net_path} 加载 TriggerNet 权重时出错：{e}。模型将使用随机初始化。")
              traceback.print_exc()
     else:
-        print(f"Warning: TriggerNet weights not found at {trigger_net_path}. Model will use random initialization.")
+        print(f"警告：未找到 TriggerNet 权重文件 {trigger_net_path}。模型将使用随机初始化。")
 
-    # Set to evaluation mode and freeze parameters
+    # 设置为评估模式并冻结参数
     xeon_net.eval()
     attention_transformer_model.eval()
     trigger_net_model.eval()
@@ -185,23 +172,23 @@ def load_atn_model(cfg: Any, device: torch.device) -> Optional[Dict[str, nn.Modu
         param.requires_grad = False
     for param in trigger_net_model.parameters():
         param.requires_grad = False
-    print("ATN model components set to eval mode and frozen.")
+    print("ATN 模型组件已设置为评估模式并冻结参数。")
 
-    # Return model dictionary including xeon_net
+    # 返回包含 xeon_net 的模型字典
     return {
         'xeon_net': xeon_net,
         'attention_transformer': attention_transformer_model,
         'trigger_net': trigger_net_model
     }
 
-# Updated get_atn_outputs function, using the full pipeline: Image -> XeonNet -> AttentionTransformer + TriggerNet
-# It receives the loaded model dictionary.
-# Input input_data shape (B, C, T, H, W) where C=3 (original image channels)
+# 获取 ATN 模型输出的函数，使用完整的数据流：图像 -> XeonNet -> AttentionTransformer + TriggerNet
+# 它接收已加载的模型字典。
+# 输入 input_data 形状 (B, C, T, H, W)，其中 C=3 (原始图像通道)
 def get_atn_outputs(
     atn_model_dict: Dict[str, nn.Module],
-    input_data: torch.Tensor, # This should be the raw image tensor
+    input_data: torch.Tensor, # 这应该是原始图像张量
     cfg: Any,
-    device: torch.device # Add device parameter
+    device: torch.device # 添加 device 参数
 ) -> Dict[str, Optional[torch.Tensor]]:
     """
     根据数据流 Image -> XeonNet -> AttentionTransformer + TriggerNet 获取模型输出。
@@ -213,65 +200,64 @@ def get_atn_outputs(
     trigger_net = atn_model_dict.get('trigger_net')
 
     if xeon_net is None or attention_transformer is None or trigger_net is None:
-        print("Error: Required ATN model components not found in the provided dictionary.")
+        print("错误：提供的字典中未找到必需的 ATN 模型组件。")
         return {
             'trigger_output': None,
             'attention_features': None,
             'features': None,
-            'decision': None,
-            'attention': None
+            'decision': None, # 旧输出，标记为 None
+            'attention': None # 旧输出，标记为 None
         }
 
-    # ATN models are frozen (requires_grad=False) in load_atn_model.
-    # We do NOT use torch.no_grad() here for adversarial_x_for_G_train
-    # so that gradients can flow back to the Generator.
-    # However, for original_images (which might be processed once and reused),
-    # or if this function is called during evaluation, torch.no_grad() is appropriate.
-    # To handle both cases, the caller should manage torch.no_grad().
-    # This function performs the forward pass assuming the models are in the correct mode.
+    # ATN 模型的参数在 load_atn_model 中已被冻结 (requires_grad=False)。
+    # 对于对抗样本 (adversarial_x_for_G)，我们不使用 torch.no_grad() 以便梯度可以流回生成器。
+    # 但是，对于原始图像 (real_x)，或者如果在评估阶段调用此函数，则 torch.no_grad() 是合适的。
+    # 为了处理这两种情况，调用方应该自行管理 torch.no_grad()。
+    # 此函数假设模型处于正确的模式下进行前向传播。
 
     try:
-        # Ensure models are on the correct device
+        # 确保输入数据在正确的设备上
         input_data = input_data.to(device)
 
-        # Convert to float if necessary (assuming ATN models expect float32)
+        # 如果需要，转换为 float (假设 ATN 模型期望 float32)
         input_data_float = input_data.float()
         
-        print(f"DEBUG: get_atn_outputs - shape of input_data: {input_data.shape}, dtype: {input_data.dtype}")
-        print(f"DEBUG: get_atn_outputs - shape of input_data_float: {input_data_float.shape}, dtype: {input_data_float.dtype}")
+        # 移除了调试打印语句
+        # print(f"DEBUG: get_atn_outputs - shape of input_data: {input_data.shape}, dtype: {input_data.dtype}")
+        # print(f"DEBUG: get_atn_outputs - shape of input_data_float: {input_data_float.shape}, dtype: {input_data_float.dtype}")
 
-        # --- 1. XeonNet: Extract Perception Features ---
-        # input_data_float IS the image
-        features = xeon_net(input_data_float) # <-- Error occurs here
-        # print("DEBUG: XeonNet output features shape:", features.shape)
+        # --- 1. XeonNet: 提取感知特征 ---
+        # input_data_float 是图像
+        features = xeon_net(input_data_float) # <-- 错误曾发生在这里
+        # print("DEBUG: XeonNet 输出特征形状:", features.shape) # 移除了调试打印
 
-        # 2. Pass features through IrisAttentionTransformers
-        # Input: Features (B, 128, T', H', W')
-        # Output: attention_features (shape needs confirmation, but used as weight_matrix in TriggerNet)
-        # Assuming AttentionTransformer takes 5D features and outputs 5D features for now.
+        # --- 2. 通过 IrisAttentionTransformers 传递特征 ---
+        # 输入：特征 (B, 128, T', H', W')
+        # 输出：attention_features (形状需要确认，但用作 TriggerNet 的 weight_matrix)
+        # 假设 AttentionTransformer 接收 5D 特征并输出 5D 特征。
         attention_features = attention_transformer(features)
-        # print("DEBUG: AttentionTransformer output shape:", attention_features.shape)
+        # print("DEBUG: AttentionTransformer 输出形状:", attention_features.shape) # 移除了调试打印
 
-        # 3. Pass features and attention_features through IrisTriggerNet
-        # TriggerNet signature: forward(self, x, weight_matrix)
-        # Assuming x is features (B, 128, T', H', W')
-        # And weight_matrix is attention_features.
-        trigger_output = trigger_net(features, attention_features) # Output shape needs confirmation (e.g., B, num_classes or B, H'', W'', num_classes)
-        # print("DEBUG: TriggerNet output shape:", trigger_output.shape)
+        # --- 3. 通过 IrisTriggerNet 传递特征和注意力特征 ---
+        # TriggerNet 函数签名：forward(self, x, weight_matrix)
+        # 假设 x 是特征 (B, 128, T', H', W')
+        # weight_matrix 是 attention_features。
+        trigger_output = trigger_net(features, attention_features) # 输出形状需要确认 (例如，B, num_classes 或 B, H'', W'', num_classes)
+        # print("DEBUG: TriggerNet 输出形状:", trigger_output.shape) # 移除了调试打印
 
-        # Return the key outputs
+        # 返回关键输出
         return {
-            'trigger_output': trigger_output, # TriggerNet's final output (attack target)
-            'attention_features': attention_features, # AttentionTransformer's output
-            'features': features, # Output from IrisXeonNet (Perception Layer)
-            'decision': None, # Old output, mark as None
-            'attention': None # Old output, mark as None
+            'trigger_output': trigger_output, # TriggerNet 的最终输出 (攻击目标)
+            'attention_features': attention_features, # AttentionTransformer 的输出
+            'features': features, # 来自 IrisXeonNet (感知层) 的输出
+            'decision': None, # 旧输出，标记为 None
+            'attention': None # 旧输出，标记为 None
         }
 
     except Exception as e:
-        print(f"[ERROR] get_atn_outputs - Error during model forward pass: {e}")
+        print(f"[错误] get_atn_outputs - 模型前向传播期间出错：{e}")
         traceback.print_exc()
-        # Return None for all outputs if error occurs
+        # 如果发生错误，所有输出都返回 None
         return {
             'trigger_output': None,
             'attention_features': None,
