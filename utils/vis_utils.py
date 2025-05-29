@@ -11,6 +11,7 @@ from torchvision.utils import make_grid
 from torch.utils.tensorboard import SummaryWriter
 from typing import Optional # 导入 Optional
 from typing import List # 导入 List
+import traceback
 
 # 导入正则化损失中的范数计算函数
 # 假设 regularization_losses.py 在 losses 文件夹下
@@ -239,322 +240,80 @@ def visualize_perturbation_norms(writer: SummaryWriter, delta: Optional[torch.Te
 
 def visualize_samples_and_outputs(writer: SummaryWriter,
                                   original_image: Optional[torch.Tensor],   # 原始图像
-                                  original_features: Optional[torch.Tensor], # 原始特征
-                                  feature_delta: Optional[torch.Tensor],    # 特征扰动
-                                  adversarial_features: Optional[torch.Tensor], # 对抗特征
-                                  original_decision_map: Optional[torch.Tensor], # 原始决策图
-                                  adversarial_decision_map: Optional[torch.Tensor], # 对抗决策图
+                                  original_features: Optional[torch.Tensor], # 原始特征 (Stage 1)
+                                  feature_delta: Optional[torch.Tensor],    # 特征扰动 (Stage 1)
+                                  adversarial_features: Optional[torch.Tensor], # 对抗特征 (Stage 1)
+                                  original_decision_map: Optional[torch.Tensor], # 原始决策图 (Stage 1)
+                                  adversarial_decision_map: Optional[torch.Tensor], # 对抗决策图 (Stage 1)
                                   step: int,
                                   num_samples: int = 4,
                                   sequence_step_to_vis: int = 0,
                                   visualize_decision_diff: bool = True): # 是否可视化决策图差异 (主要用于 Stage 2)
     """
     可视化原始图像、对抗样本、扰动、特征层、决策图等到 TensorBoard。
+    Modified for Stage 2 to focus on image inputs.
 
     Args:
         writer (SummaryWriter): TensorBoard 的 SummaryWriter 对象。
-        original_image (Optional[torch.Tensor]): 原始输入图像批次 (B, C, H, W)。
-        original_features (Optional[torch.Tensor]): 原始样本通过 ATN 的特征层输出 (B, C, N, H, W)。
-        feature_delta (Optional[torch.Tensor]): 阶段1 生成的特征层扰动 (B, C, N, H, W)。
-        adversarial_features (Optional[torch.Tensor]): 对抗样本通过 ATN 的特征层输出 (B, C, N, H, W)。
-        original_decision_map (Optional[torch.Tensor]): 原始样本通过 ATN 的决策图输出 (B, H, W)。
-        adversarial_decision_map (Optional[torch.Tensor]): 对抗样本通过 ATN 的决策图输出 (B, H, W)。
+        original_image (Optional[torch.Tensor]): 原始输入图像批次 (B, C, T, H, W).
+        # The following arguments are primarily for Stage 1 and may not be used in Stage 2 visualization.
+        original_features (Optional[torch.Tensor]): Original ATN features (B, C, N, H, W).
+        feature_delta (Optional[torch.Tensor]): Stage 1 feature perturbation (B, C, N, H, W).
+        adversarial_features (Optional[torch.Tensor]): Adversarial ATN features (B, C, N, H, W).
+        original_decision_map (Optional[torch.Tensor]): Original decision map (B, H, W) or (B, N, H, W).
+        adversarial_decision_map (Optional[torch.Tensor]): Adversarial decision map (B, H, W) or (B, N, H, W).
         step (int): 当前的训练全局步数。
         num_samples (int): 要可视化的样本数量。
-        sequence_step_to_vis (int): 要可视化的特征层的序列步骤索引。
-        visualize_decision_diff (bool): 是否可视化原始决策图和对抗决策图的差异。
+        sequence_step_to_vis (int): 要可视化的序列步骤索引。
+        visualize_decision_diff (bool): Whether to visualize the difference between original and adversarial decision maps (primarily for Stage 1).
     """
-    # # --- Add Debug Prints for Tensor Shapes and numel() ---
+    # --- Add Debug Prints for Tensor Shapes and numel() --- (Keep for debugging if needed)
     # print(f"DEBUG VIS: Step {step}")
-    # print(f"DEBUG VIS: original_image_cpu shape: {original_image.shape if original_image is not None else None}, numel: {original_image.numel() if original_image is not None else 0}")
-    # print(f"DEBUG VIS: original_features_cpu shape: {original_features.shape if original_features is not None else None}, numel: {original_features.numel() if original_features is not None else 0}")
-    # print(f"DEBUG VIS: feature_delta_cpu shape: {feature_delta.shape if feature_delta is not None else None}, numel: {feature_delta.numel() if feature_delta is not None else 0}")
-    # print(f"DEBUG VIS: adversarial_features_cpu shape: {adversarial_features.shape if adversarial_features is not None else None}, numel: {adversarial_features.numel() if adversarial_features is not None else 0}")
-    # print(f"DEBUG VIS: original_decision_map_cpu shape: {original_decision_map.shape if original_decision_map is not None else None}, numel: {original_decision_map.numel() if original_decision_map is not None else 0}")
-    # print(f"DEBUG VIS: adversarial_decision_map_cpu shape: {adversarial_decision_map.shape if adversarial_decision_map is not None else None}, numel: {adversarial_decision_map.numel() if adversarial_decision_map is not None else 0}")
-    # # --- End Debug Prints ---
+    # print(f"DEBUG VIS: original_image shape: {original_image.shape if original_image is not None else None}, numel: {original_image.numel() if original_image is not None else 0}")
+    # print(f"DEBUG VIS: original_features shape: {original_features.shape if original_features is not None else None}, numel: {original_features.numel() if original_features is not None else 0}")
+    # print(f"DEBUG VIS: feature_delta shape: {feature_delta.shape if feature_delta is not None else None}, numel: {feature_delta.numel() if feature_delta is not None else 0}")
+    # print(f"DEBUG VIS: adversarial_features shape: {adversarial_features.shape if adversarial_features is not None else None}, numel: {adversarial_features.numel() if adversarial_features is not None else 0}")
+    # print(f"DEBUG VIS: original_decision_map shape: {original_decision_map.shape if original_decision_map is not None else None}, numel: {original_decision_map.numel() if original_decision_map is not None else 0}")
+    # print(f"DEBUG VIS: adversarial_decision_map shape: {adversarial_decision_map.shape if adversarial_decision_map is not None else None}, numel: {adversarial_decision_map.numel() if adversarial_decision_map is not None else 0}")
+    # --- End Debug Prints ---
 
-    def _process_decision_map(decision_map: Optional[torch.Tensor], name: str, sequence_step: int) -> Optional[torch.Tensor]:
-        print(f"[_process_decision_map] Processing '{name}'. Initial state: {decision_map.shape if decision_map is not None else 'None'}, ndim: {decision_map.ndim if decision_map is not None else 'None'}, numel: {decision_map.numel() if decision_map is not None else 'None'}")
+    # This function is primarily for Stage 1 visualization of features and decision maps.
+    # For Stage 2 (Pixel Attack), we will primarily use visualize_stage2_pixel_attack.
+    # However, this function can still be used to visualize the original image input if needed.
+    # We will retain the image visualization part and remove the feature/decision map parts.
 
-        if decision_map is None or decision_map.numel() == 0:
-            print(f"[_process_decision_map] '{name}' is None or empty. Returning None.")
-            return None
-        
-        processed_map = None
-        try:
-            if decision_map.ndim == 5:
-                # Assuming (B, C, N, H, W), take first channel and specified sequence step
-                print(f"[_process_decision_map] '{name}' is 5D. Shape: {decision_map.shape}. Selecting channel 0, sequence step {sequence_step}.")
-                # Check if sequence_step is valid
-                if sequence_step >= decision_map.shape[2] or sequence_step < 0:
-                     print(f"Warning: {name} sequence_step {sequence_step} out of bounds for N={decision_map.shape[2]}. Defaulting to 0.")
-                     sequence_step = 0
-                processed_map = decision_map[:, 0, sequence_step, :, :].unsqueeze(1)
-                print(f"[_process_decision_map] After processing 5D '{name}'. Shape: {processed_map.shape}, ndim: {processed_map.ndim}.")
-
-            elif decision_map.ndim == 4:
-                # Assuming (B, N, H, W) or (B, C, H, W). If C is not 1, assume N is sequence length
-                print(f"[_process_decision_map] '{name}' is 4D. Shape: {decision_map.shape}. Checking channel/sequence dim.")
-                if decision_map.shape[1] == 1: # (B, 1, H, W) - Already 4D single channel
-                    print(f"[_process_decision_map] '{name}' is 4D (B, 1, H, W). Using directly.")
-                    processed_map = decision_map
-                else: # Assume (B, N, H, W) where N is sequence length and N > 1
-                    print(f"[_process_decision_map] '{name}' is 4D (B, N, H, W) with N={decision_map.shape[1]}. Selecting sequence step {sequence_step}.")
-                    # Check if sequence_step is valid
-                    if sequence_step >= decision_map.shape[1] or sequence_step < 0:
-                         print(f"Warning: {name} sequence_step {sequence_step} out of bounds for N={decision_map.shape[1]}. Defaulting to 0.")
-                         sequence_step = 0
-                    processed_map = decision_map[:, sequence_step, :, :].unsqueeze(1)
-                    print(f"[_process_decision_map] After processing 4D (B, N, H, W) '{name}'. Shape: {processed_map.shape}, ndim: {processed_map.ndim}.")
-
-            elif decision_map.ndim == 3: # (B, H, W) - Needs channel dim
-                print(f"[_process_decision_map] '{name}' is 3D (B, H, W). Adding channel dimension.")
-                processed_map = decision_map.unsqueeze(1)
-                print(f"[_process_decision_map] After processing 3D '{name}'. Shape: {processed_map.shape}, ndim: {processed_map.ndim}.")
-            else:
-                print(f"Warning: {name} has unsupported dimensions {decision_map.ndim} ({decision_map.shape}). Expected 3D, 4D, or 5D for conversion. Returning None.")
-                return None
-            
-            # Ensure the processed map is on CPU, detached, and is float type
-            if processed_map is not None:
-                processed_map = processed_map.cpu().detach().float()
-                print(f"[_process_decision_map] '{name}' moved to CPU, detached, float. Final Shape before return: {processed_map.shape}, ndim: {processed_map.ndim}, dtype: {processed_map.dtype}.")
-
-                # Final check: Ensure the result is 4D with 1 channel for make_grid
-                if processed_map.ndim == 4 and processed_map.shape[1] == 1:
-                    print(f"[_process_decision_map] Final check passed for '{name}'. Returning processed map.")
-                    return processed_map
-                else:
-                    print(f"[_process_decision_map] Final check FAILED for '{name}'. Processed shape {processed_map.shape} is not 4D (B, 1, H, W). Returning None.")
-                    return None
-
-            return processed_map # Should be None if processing failed earlier
-
-        except Exception as e:
-            print(f"[_process_decision_map] Error processing '{name}': {e}. Returning None.")
-            import traceback
-            traceback.print_exc()
-            return None
-
-    # Process decision maps
-    # Use sequence_step_to_vis for decision maps as well
-    print("[visualize_samples_and_outputs] Starting decision map processing.")
-    processed_orig_decision_map = _process_decision_map(original_decision_map, "Original decision map", sequence_step_to_vis)
-    processed_adv_decision_map = _process_decision_map(adversarial_decision_map, "Adversarial decision map", sequence_step_to_vis)
-    print(f"[visualize_samples_and_outputs] Processed original decision map is None: {processed_orig_decision_map is None}, numel: {processed_orig_decision_map.numel() if processed_orig_decision_map is not None else 'None'}")
-    print(f"[visualize_samples_and_outputs] Processed adversarial decision map is None: {processed_adv_decision_map is None}, numel: {processed_adv_decision_map.numel() if processed_adv_decision_map is not None else 'None'}")
-
-
-    # --- 可视化决策图 (如果可用) ---
-    # 检查处理后的原始决策图是否有效且非空
-    if processed_orig_decision_map is not None and processed_orig_decision_map.numel() > 0:
-        # 可视化原始决策图
-        print("[visualize_samples_and_outputs] Visualizing original decision map.")
-        grid_orig_decision = make_grid(processed_orig_decision_map, nrow=num_samples, normalize=True)
-        writer.add_image('Decision_Maps/Original', grid_orig_decision, step)
-
-        # 确保对抗决策图存在、非空且形状匹配原始矩阵
-        if processed_adv_decision_map is not None and processed_adv_decision_map.numel() > 0 and processed_adv_decision_map.shape == processed_orig_decision_map.shape:
-            # 可视化对抗决策图
-            print("[visualize_samples_and_outputs] Visualizing adversarial decision map.")
-            grid_adv_decision = make_grid(processed_adv_decision_map, nrow=num_samples, normalize=True)
-            writer.add_image('Decision_Maps/Adversarial', grid_adv_decision, step)
-
-            # 可视化决策图的差异 (如果启用)
-            if visualize_decision_diff:
-                print("[visualize_samples_and_outputs] Visualizing decision map difference.")
-                decision_diff_map = torch.abs(processed_adv_decision_map - processed_orig_decision_map)
-                if decision_diff_map.numel() > 0:
-                    min_val = decision_diff_map.min()
-                    max_val = decision_diff_map.max()
-                    if max_val > min_val + 1e-8:
-                         normalized_diff_map = (decision_diff_map - min_val) / (max_val - min_val + 1e-8)
-                    else:
-                         normalized_diff_map = torch.zeros_like(decision_diff_map, device=decision_diff_map.device)
-
-                    grid_decision_diff = make_grid(normalized_diff_map, nrow=num_samples, normalize=False)
-                    writer.add_image('Decision_Maps/Difference', grid_decision_diff, step)
-                else:
-                     print("[visualize_samples_and_outputs] Decision difference map is empty. Skipping difference visualization.")
-
-        else:
-             print(f"[visualize_samples_and_outputs] Warning: Adversarial decision map is None/empty or shape mismatch ({processed_adv_decision_map.shape if processed_adv_decision_map is not None else 'None'} vs {processed_orig_decision_map.shape}). Skipping adversarial decision map and difference visualization.")
-    else:
-        # 打印原始输入张量的状态，帮助最终诊断
-        print(f"[visualize_samples_and_outputs] Warning: Original decision map is None or empty after processing. Skipping decision map visualization. Input original decision map state: {original_decision_map.shape if original_decision_map is not None else 'None'}, ndim: {original_decision_map.ndim if original_decision_map is not None else 'None'}, numel: {original_decision_map.numel() if original_decision_map is not None else 'None'}")
-
-    # --- Stage 1 Visualization (Original Image, Feature Delta, Feature Maps) ---
-    # Stage 1 的可视化逻辑保持不变
-    # 确保原始图像、特征等存在且非空
-    if original_image is not None and original_features is not None and feature_delta is not None and adversarial_features is not None:
-        # print("Debug: Stage 1 related tensors are available for visualization.") # Debug print
-
-        # 尝试从任意非空张量中获取批量大小和设备
-        batch_size = 0
-        device = 'cpu'
-        valid_tensors = [original_image, original_features, feature_delta, adversarial_features]
-        for t in valid_tensors:
-            if t is not None and t.numel() > 0:
-                batch_size = t.shape[0]
-                device = t.device # 获取张量所在设备
-                break # 找到第一个有效张量即停止
-
-        # 如果没有有效张量，无法进行可视化
-        if batch_size == 0:
-            # print("Warning: No valid input tensors with batch dimension for Stage 1 visualization. Skipping.") # 避免过多打印
-            return # Early exit if no valid tensors for Stage 1 vis
-
+    # --- 可视化原始图像 (如果可用) ---
+    # 假设原始图像是 5D (B, C_img, T, H_img, W_img)
+    if original_image is not None and original_image.numel() > 0 and original_image.ndim == 5:
         # 确定实际要显示的样本数量
+        batch_size = original_image.shape[0]
         num_samples_to_show = min(num_samples, batch_size)
-        # print(f"Debug: Visualizing {num_samples_to_show} samples for Stage 1.") # Debug print
 
-        # 将要显示的张量移动到 CPU (如果不在 CPU 上) 并选取切片
-        # 使用 .detach() 断开计算图，使用 .cpu() 移动到 CPU
-        original_image_cpu = original_image[:num_samples_to_show].cpu().detach() if original_image is not None else None
-        # 检查并只选取 numel > 0 的张量进行切片和移动
-        original_features_cpu = original_features[:num_samples_to_show].cpu().detach() if original_features is not None and original_features.numel() > 0 else None # Empty tensor if numel==0
-        feature_delta_cpu = feature_delta[:num_samples_to_show].cpu().detach() if feature_delta is not None and feature_delta.numel() > 0 else None # Empty tensor if numel==0
-        adversarial_features_cpu = adversarial_features[:num_samples_to_show].cpu().detach() if adversarial_features is not None and adversarial_features.numel() > 0 else None # Empty tensor if numel==0
+        # 检查序列步骤是否有效，并提取指定步骤的图像 (B, C_img, H_img, W_img)
+        img_seq_len = original_image.shape[2]
+        vis_step_img = min(sequence_step_to_vis, img_seq_len - 1) # 确保步骤在范围内
+        vis_step_img = max(0, vis_step_img)
 
-        # --- 可视化原始图像 (如果可用) ---
-        # 假设原始图像是 5D (B, C_img, T, H_img, W_img)
-        if original_image_cpu is not None and original_image_cpu.ndim == 5:
-            # 检查序列步骤是否有效，并提取指定步骤的图像 (B, C_img, H_img, W_img)
-            img_seq_len = original_image_cpu.shape[2]
-            vis_step_img = min(sequence_step_to_vis, img_seq_len - 1) # 确保步骤在范围内
-            vis_step_img = max(0, vis_step_img)
+        original_image_step = original_image[:num_samples_to_show, :, vis_step_img, :, :].squeeze(2).cpu().detach() # Remove sequence dim, move to CPU, detach
+        # make_grid needs input shape (B, C, H, W)
+        # Assuming original image is 3 channels (RGB)
+        if original_image_step.shape[1] == 3:
+            grid_image = make_grid(original_image_step, nrow=num_samples_to_show, normalize=True)
+            writer.add_image('Samples/Original_Image', grid_image, step)
+        else:
+            # 警告：原始图像不是 3 通道 ({})。跳过原始图像可视化。
+            print(f"Warning: Original image is not 3 channels ({original_image_step.shape[1]}). Skipping original image visualization in visualize_samples_and_outputs.")
 
-            original_image_step = original_image_cpu[:, :, vis_step_img, :, :].squeeze(2) # 移除序列维度
-            # make_grid 需要输入形状 (B, C, H, W)
-            # 假设原始图像是 3 通道 (RGB)
-            if original_image_step.shape[1] == 3:
-                grid_image = make_grid(original_image_step, nrow=num_samples_to_show, normalize=True)
-                writer.add_image('Samples/Original_Image', grid_image, step)
-            else:
-                # 警告：原始图像不是 3 通道 ({})。跳过原始图像可视化。
-                print(f"Warning: Original image is not 3 channels ({original_image_step.shape[1]}). Skipping original image visualization.")
+    # --- Remove Stage 1 specific visualizations ---
+    # Commenting out or removing the logic for visualizing features and decision maps.
+    # The _process_decision_map helper can also be removed or kept if needed elsewhere.
+    pass # Placeholder for removed code
 
-        # --- 可视化特征相关的图 (如果特征可用) ---
-        # 假设特征是 5D (B, C_feat, N, H_feat, W_feat)
-        if original_features_cpu is not None and original_features_cpu.numel() > 0 and original_features_cpu.ndim == 5:
-            # print("Debug: Feature tensors are available for visualization.") # Debug print
-            # 检查序列步骤是否有效，并用于特征可视化
-            feat_seq_len = original_features_cpu.shape[2]
-            vis_step_feat = min(sequence_step_to_vis, feat_seq_len - 1)
-            vis_step_feat = max(0, vis_step_feat)
+# Keep visualize_attention_maps as it might be useful for analysis
+# Keep visualize_training_losses and visualize_perturbation_norms
 
-            # 可视化原始特征
-            # 使用 feature_to_visualizable 将 5D 特征转换为 4D 可视化张量
-            vis_orig_features = feature_to_visualizable(original_features_cpu, sequence_step=vis_step_feat, mode='l2_norm') # 示例：可视化 L2 范数
-            if vis_orig_features.numel() > 0:
-                # make_grid 需要输入形状 (B, C, H, W)
-                # vis_orig_features 的形状是 (B, 1, H, W) 或 (B, 3, H, W)
-                grid_orig_features = make_grid(vis_orig_features, nrow=num_samples_to_show, normalize=True) # 确保在 CPU 上并 detached
-                writer.add_image(f'Features/Original_Seq{vis_step_feat}_L2Norm', grid_orig_features, step)
-
-            # 可视化特征扰动 Delta (如果可用) - 仅当 delta 形状匹配原始特征时
-            if feature_delta_cpu is not None and feature_delta_cpu.numel() > 0 and feature_delta_cpu.ndim == 5 and feature_delta_cpu.shape == original_features_cpu.shape:
-                 # print("Debug: Feature delta is available and shape matches.") # Debug print
-                 vis_feature_delta = feature_to_visualizable(feature_delta_cpu, sequence_step=vis_step_feat, mode='l2_norm') # 示例：可视化 L2 范数
-                 if vis_feature_delta.numel() > 0:
-                     grid_feature_delta = make_grid(vis_feature_delta, nrow=num_samples_to_show, normalize=True) # 确保在 CPU 上并 detached
-                     writer.add_image(f'Features/Feature_Perturbation_Delta_Seq{vis_step_feat}_L2Norm', grid_feature_delta, step)
-            elif feature_delta_cpu is not None:
-                 # 警告：特征扰动 delta 形状 {} 与原始特征形状 {} 不匹配。跳过扰动可视化。
-                 print(f"Warning: Feature delta shape {feature_delta_cpu.shape} != Original features shape {original_features_cpu.shape}. Skipping delta visualization.")
-
-            # 可视化对抗性特征 (如果可用) - 仅当对抗特征形状匹配原始特征时
-            if adversarial_features_cpu is not None and adversarial_features_cpu.numel() > 0 and adversarial_features_cpu.ndim == 5 and adversarial_features_cpu.shape == original_features_cpu.shape:
-                 # print("Debug: Adversarial features are available and shape matches.") # Debug print
-                 vis_adv_features = feature_to_visualizable(adversarial_features_cpu, sequence_step=vis_step_feat, mode='l2_norm') # 示例：可视化 L2 范数
-                 if vis_adv_features.numel() > 0:
-                     grid_adv_features = make_grid(vis_adv_features, nrow=num_samples_to_show, normalize=True) # 确保在 CPU 上并 detached
-                     writer.add_image(f'Features/Adversarial_Seq{vis_step_feat}_L2Norm', grid_adv_features, step)
-
-                     # 可视化原始特征与对抗特征的差异 - 仅当两者形状匹配时
-                     feature_diff = adversarial_features_cpu - original_features_cpu
-                     # 计算差异的 L2 范数图 (空间维度上)
-                     # 确保选取正确序列步骤，并移除序列维度以便计算空间维度的范数 (结果形状 B, C, H, W)
-                     feature_diff_step = feature_diff[:, :, vis_step_feat, :, :].squeeze(2) # (B, C, H, W)
-                     feature_diff_l2_norm_map = torch.linalg.norm(feature_diff_step, dim=1, keepdim=True) # (B, 1, H, W)
-
-                     # 归一化差异图以便可视化 (0到最大差异)
-                     if feature_diff_l2_norm_map.numel() > 0:
-                           min_val = feature_diff_l2_norm_map.min()
-                           max_val = feature_diff_l2_norm_map.max()
-                           if max_val > min_val + 1e-8:
-                                normalized_diff_map = (feature_diff_l2_norm_map - min_val) / (max_val - min_val + 1e-8)
-                           else:
-                                normalized_diff_map = torch.zeros_like(feature_diff_l2_norm_map, device=feature_diff_l2_norm_map.device)
-
-                           grid_feature_diff = make_grid(normalized_diff_map.cpu().detach(), nrow=num_samples_to_show, normalize=False) # 确保在 CPU 上并 detached
-                           writer.add_image(f'Features/Feature_Difference_Seq{vis_step_feat}_L2Norm', grid_feature_diff, step)
-                 else:
-                      # 警告：对抗特征形状 {} 与原始特征形状 {} 不匹配。跳过对抗特征和差异可视化。
-                      print(f"Warning: Adversarial features shape {adversarial_features_cpu.shape} != Original features shape {original_features_cpu.shape}. Skipping adversarial features and difference visualization.")
-            elif adversarial_features_cpu is not None:
-                 # 警告：对抗特征形状 {} 与原始特征形状 {} 不匹配。跳过对抗特征和差异可视化。
-                 print(f"Warning: Adversarial features shape {adversarial_features_cpu.shape} != Original features shape {original_features_cpu.shape}. Skipping adversarial features and difference visualization.")
-
-            # 可视化特征直方图 (每个样本) - 仅当原始特征可用时
-            if original_features_cpu.numel() > 0 and original_features_cpu.ndim == 5:
-                # print("Debug: Feature histograms will be visualized.") # Debug print
-                 # 选择一个序列步骤进行直方图可视化
-                 hist_step_feat = min(sequence_step_to_vis, original_features_cpu.shape[2] - 1)
-                 hist_step_feat = max(0, hist_step_feat)
-
-                 # 对原始特征、特征扰动和对抗特征绘制直方图 (展平除批量外的所有维度)
-                 # 仅在对应的张量存在且形状匹配时进行
-                 if original_features_cpu.numel() > 0:
-                      # original_features_cpu shape: (B, C, N, H, W)
-                      # 展平除批量维度外的所有维度 for histogram
-                      original_features_flat_hist_combined = original_features_cpu[:, :, hist_step_feat, :, :].reshape(-1).float().cpu().numpy() # 确保在 CPU 上
-                      # 绘制原始特征的合并直方图
-                      writer.add_histogram(f'Histograms/Original_Features_Seq{hist_step_feat}', original_features_flat_hist_combined, step)
-
-                 if feature_delta_cpu is not None and feature_delta_cpu.numel() > 0 and feature_delta_cpu.shape == original_features_cpu.shape:
-                       # 展平选定序列步骤的所有样本的扰动数据，以便绘制合并直方图
-                       feature_delta_flat_hist_combined = feature_delta_cpu[:, :, hist_step_feat, :, :].reshape(-1).float().cpu().numpy() # 确保在 CPU 上
-                       # 绘制特征扰动的合并直方图
-                       writer.add_histogram(f'Histograms/Feature_Perturbation_Delta_Seq{hist_step_feat}', feature_delta_flat_hist_combined, step)
-
-                 if adversarial_features_cpu is not None and adversarial_features_cpu.numel() > 0 and adversarial_features_cpu.shape == original_features_cpu.shape:
-                       # 展平选定序列步骤的所有样本的对抗特征数据，以便绘制合并直方图
-                       adversarial_features_flat_hist_combined = adversarial_features_cpu[:, :, hist_step_feat, :, :].reshape(-1).float().cpu().numpy() # 确保在 CPU 上
-                       # 绘制对抗特征的合并直方图
-                       writer.add_histogram(f'Histograms/Adversarial_Features_Seq{hist_step_feat}', adversarial_features_flat_hist_combined, step)
-
-                 # 可视化通道子集 (仅对原始特征和对抗特征) - 仅在原始特征可用时
-                 # 定义要可视化的通道子集 (示例：前 3 个，中间某个范围，最后一个)
-                 # 可以从 config 中读取这个列表
-                 # channel_subset_to_vis = [0, 1, 2] # Example
-                 # if original_features_cpu.shape[1] > 10: channel_subset_to_vis.extend([10, 20, 30])
-                 # if original_features_cpu.shape[1] > 100: channel_subset_to_vis.extend([100, original_features_cpu.shape[1]-1])
-
-                 # 示例：可视化一些固定索引的通道子集，确保索引不越界
-                 channel_indices = [0, 1, 2, 50, 100, original_features_cpu.shape[1] - 1] # 示例索引
-                 valid_channel_subset = [idx for idx in channel_indices if 0 <= idx < original_features_cpu.shape[1]]
-
-                 if valid_channel_subset:
-                      # print(f"Debug: Visualizing feature channel subsets: {valid_channel_subset}.") # Debug print
-                      # 可视化原始特征的通道子集
-                      vis_orig_features_subset = feature_to_visualizable(original_features_cpu, sequence_step=vis_step_feat, mode='channel_subset', channel_subset=valid_channel_subset)
-                      if vis_orig_features_subset.numel() > 0:
-                          # make_grid 将所有选定的通道并排放置
-                          grid_orig_features_subset = make_grid(vis_orig_features_subset.cpu().detach(), nrow=num_samples_to_show, normalize=True) # 确保在 CPU 上并 detached
-                          writer.add_image(f'Feature_Channel_Subsets/Original_Seq{vis_step_feat}_Channels{valid_channel_subset}', grid_orig_features_subset, step)
-
-                      # 可视化对抗特征的通道子集 (如果可用)
-                      if adversarial_features_cpu is not None and adversarial_features_cpu.numel() > 0 and adversarial_features_cpu.shape == original_features_cpu.shape:
-                           # print("Debug: Visualizing adversarial feature channel subsets.") # Debug print
-                           vis_adv_features_subset = feature_to_visualizable(adversarial_features_cpu, sequence_step=vis_step_feat, mode='channel_subset', channel_subset=valid_channel_subset) # 确保在 CPU 上并 detached
-                           if vis_adv_features_subset.numel() > 0:
-                               grid_adv_features_subset = make_grid(vis_adv_features_subset.cpu().detach(), nrow=num_samples_to_show, normalize=True)
-                               writer.add_image(f'Feature_Channel_Subsets/Adversarial_Seq{vis_step_feat}_Channels{valid_channel_subset}', grid_adv_features_subset, step)
-
-    # TODO: 可视化注意力图 (这通常在 Stage 2 更相关) -> 由 visualize_attention_maps 函数处理
-    # visualize_attention_maps 函数需要原始和对抗的注意力矩阵作为输入
+# Ensure visualize_stage2_pixel_attack is correctly defined and used in the training script
+# This function should handle visualization of original images, adversarial images, pixel deltas, and TriggerNet outputs.
 
 # TODO: 可视化注意力图
 def visualize_attention_maps(writer: SummaryWriter,
@@ -653,6 +412,168 @@ def visualize_attention_maps(writer: SummaryWriter,
     # TODO: 可视化 Top-K 位置的变化或值下降 (如果相关)
     # 这可能需要计算并绘制 Top-K 索引的热力图或标记图
     # 或者在 visualize_samples_and_outputs 函数中叠加标记
+
+def visualize_stage2_pixel_attack(writer: SummaryWriter,
+                                    original_images: torch.Tensor,
+                                    adversarial_images: torch.Tensor,
+                                    pixel_deltas: torch.Tensor,
+                                    original_trigger_output: Optional[torch.Tensor], # TriggerNet output
+                                    adversarial_trigger_output: Optional[torch.Tensor], # TriggerNet output
+                                    step: int,
+                                    num_samples: int = 4,
+                                    sequence_step_to_vis: int = 0):
+    """
+    可视化 Stage 2 像素级攻击训练过程的关键元素：
+    原始图像、对抗图像、像素扰动，以及原始和对抗样本的 TriggerNet 输出。
+
+    Args:
+        writer (SummaryWriter): TensorBoard 的 SummaryWriter 对象。
+        original_images (torch.Tensor): 原始输入图像批次 (B, C, T, H, W)。
+        adversarial_images (torch.Tensor): 添加扰动后的对抗图像批次 (B, C, T, H, W)。
+        pixel_deltas (torch.Tensor): 生成的像素级扰动批次 (B, C, T, H, W)。
+        original_trigger_output (Optional[torch.Tensor]): 原始样本通过 ATN 后的 TriggerNet 输出。
+        adversarial_trigger_output (Optional[torch.Tensor]): 对抗样本通过 ATN 后的 TriggerNet 输出。
+        step (int): 当前的训练全局步数。
+        num_samples (int): 要可视化的样本数量。
+        sequence_step_to_vis (int): 要可视化的序列步骤索引。
+    """
+    # Ensure tensors are 5D (B, C, T, H, W) and on CPU
+    if original_images.ndim != 5 or adversarial_images.ndim != 5 or pixel_deltas.ndim != 5:
+        print(f"Warning: Input images or deltas are not 5D. Cannot visualize stage 2 pixel attack.")
+        return
+        
+    # Determine batch size and number of samples to show
+    batch_size = original_images.shape[0]
+    num_samples_to_show = min(num_samples, batch_size)
+    
+    # Determine sequence length and the step to visualize
+    seq_len = original_images.shape[2]
+    vis_step = min(sequence_step_to_vis, seq_len - 1)
+    vis_step = max(0, vis_step)
+
+    # Select the specified sequence step and move to CPU/detach
+    original_images_step = original_images[:num_samples_to_show, :, vis_step, :, :].cpu().detach()
+    adversarial_images_step = adversarial_images[:num_samples_to_show, :, vis_step, :, :].cpu().detach()
+    pixel_deltas_step = pixel_deltas[:num_samples_to_show, :, vis_step, :, :].cpu().detach()
+
+    # --- Visualize Images and Deltas ---
+    # Assuming images are 3-channel (RGB)
+    if original_images_step.shape[1] == 3 and adversarial_images_step.shape[1] == 3 and pixel_deltas_step.shape[1] == 3:
+        # Original Images
+        grid_orig_img = make_grid(original_images_step, nrow=num_samples_to_show, normalize=True)
+        writer.add_image(f'Stage2_Visualization/Epoch_Step_{step}/Original_Images_Seq{vis_step}', grid_orig_img, step)
+
+        # Adversarial Images
+        grid_adv_img = make_grid(adversarial_images_step, nrow=num_samples_to_show, normalize=True)
+        writer.add_image(f'Stage2_Visualization/Epoch_Step_{step}/Adversarial_Images_Seq{vis_step}', grid_adv_img, step)
+
+        # Pixel Deltas (Normalize to visualize the perturbation intensity, potentially scaled)
+        # We can normalize based on the epsilon value or min/max in the batch
+        # Let's normalize based on the batch's min/max for now
+        min_delta = pixel_deltas_step.min()
+        max_delta = pixel_deltas_step.max()
+        if max_delta > min_delta + 1e-8:
+            normalized_deltas = (pixel_deltas_step - min_delta) / (max_delta - min_delta + 1e-8)
+        else:
+            normalized_deltas = torch.zeros_like(pixel_deltas_step, device=pixel_deltas_step.device)
+
+        grid_deltas = make_grid(normalized_deltas, nrow=num_samples_to_show, normalize=False) # Already normalized
+        writer.add_image(f'Stage2_Visualization/Epoch_Step_{step}/Pixel_Deltas_Seq{vis_step}', grid_deltas, step)
+    else:
+        print(f"Warning: Images or deltas are not 3 channels. Skipping image/delta visualization in visualize_stage2_pixel_attack.")
+
+    # --- Visualize TriggerNet Outputs (If available) ---
+    # Assuming TriggerNet output is a spatial map (e.g., B, H', W') or (B, num_classes)
+    # If it's a spatial map, we can visualize it as a heatmap.
+    # If it's a class score, maybe plot or log the scores/differences.
+
+    # Need to know the shape and meaning of TriggerNet output to visualize it effectively.
+    # Based on the get_atn_outputs implementation and test.py, it might be (B, H', W', 8) - spatial output with 8 channels?
+    # Or it might be reduced to (B, 8) or (B, 1) or similar depending on the final layer.
+    # Let's assume for now it's a spatial map (B, ?, H', W') and visualize the first channel or mean/norm.
+
+    def _process_trigger_output_for_vis(trigger_output: Optional[torch.Tensor], name: str) -> Optional[torch.Tensor]:
+        if trigger_output is None or trigger_output.numel() == 0:
+            # print(f"Warning: TriggerNet output '{name}' is None or empty. Skipping visualization.") # Avoid excessive prints
+            return None
+
+        processed_output = None
+        try:
+            # Assuming TriggerNet output might be (B, ..., H', W'). Need to get it to (B, 1, H', W') or (B, 3, H', W').
+            if trigger_output.ndim == 4: # e.g., (B, C_out, H', W') or (B, N, H', W')
+                 # If C_out or N is 1, use it directly. If > 1, take mean or first channel.
+                 if trigger_output.shape[1] == 1:
+                      processed_output = trigger_output
+                 elif trigger_output.shape[1] >= 3: # Take first 3 channels
+                      processed_output = trigger_output[:, :3, :, :]
+                 else: # Take mean across channels
+                      processed_output = torch.mean(trigger_output, dim=1, keepdim=True)
+            elif trigger_output.ndim == 5: # e.g., (B, C_out, N, H', W') - take specified sequence step
+                 seq_len_out = trigger_output.shape[2]
+                 vis_step_out = min(sequence_step_to_vis, seq_len_out - 1)
+                 vis_step_out = max(0, vis_step_out)
+                 trigger_output_step = trigger_output[:, :, vis_step_out, :, :].squeeze(2) # (B, C_out, H', W')
+
+                 if trigger_output_step.shape[1] == 1:
+                      processed_output = trigger_output_step
+                 elif trigger_output_step.shape[1] >= 3: # Take first 3 channels
+                      processed_output = trigger_output_step[:, :3, :, :]
+                 else: # Take mean across channels
+                      processed_output = torch.mean(trigger_output_step, dim=1, keepdim=True)
+
+            elif trigger_output.ndim == 3: # e.g., (B, H', W') - add channel dim
+                 processed_output = trigger_output.unsqueeze(1) # (B, 1, H', W')
+
+            # Handle case where output is not spatial, e.g., (B, num_classes)
+            # For now, if not spatial, skip visualization as make_grid is for images.
+            if processed_output is not None and processed_output.ndim == 4 and processed_output.shape[2] > 1 and processed_output.shape[3] > 1: # Check if it looks like an image batch
+                 # Normalize the output for visualization
+                 normalized_batch = []
+                 for img in processed_output[:num_samples_to_show]:
+                      min_val = img.min()
+                      max_val = img.max()
+                      if max_val > min_val + 1e-8:
+                           normalized_img = (img - min_val) / (max_val - min_val + 1e-8)
+                      else:
+                           normalized_img = torch.zeros_like(img, device=img.device)
+                      normalized_batch.append(normalized_img)
+                 return torch.stack(normalized_batch, dim=0).float()
+            else:
+                 # print(f"Warning: TriggerNet output '{name}' is not in a suitable spatial format for image visualization (ndim={trigger_output.ndim}, shape={trigger_output.shape}).") # Avoid excessive prints
+                 return None
+
+        except Exception as e:
+            print(f"Error processing TriggerNet output '{name}' for visualization: {e}")
+            traceback.print_exc()
+            return None
+
+    processed_orig_trigger_output = _process_trigger_output_for_vis(original_trigger_output, "Original TriggerNet Output")
+    processed_adv_trigger_output = _process_trigger_output_for_vis(adversarial_trigger_output, "Adversarial TriggerNet Output")
+
+    if processed_orig_trigger_output is not None:
+        grid_orig_trigger = make_grid(processed_orig_trigger_output, nrow=num_samples_to_show, normalize=False)
+        writer.add_image(f'Stage2_Visualization/Epoch_Step_{step}/Original_TriggerNet_Output_Seq{vis_step}', grid_orig_trigger, step)
+
+    if processed_adv_trigger_output is not None and processed_adv_trigger_output.shape == processed_orig_trigger_output.shape:
+        grid_adv_trigger = make_grid(processed_adv_trigger_output, nrow=num_samples_to_show, normalize=False)
+        writer.add_image(f'Stage2_Visualization/Epoch_Step_{step}/Adversarial_TriggerNet_Output_Seq{vis_step}', grid_adv_trigger, step)
+
+        # Visualize the difference between original and adversarial TriggerNet outputs
+        trigger_output_diff = torch.abs(processed_adv_trigger_output - processed_orig_trigger_output)
+        if trigger_output_diff.numel() > 0:
+             min_diff = trigger_output_diff.min()
+             max_diff = trigger_output_diff.max()
+             if max_diff > min_diff + 1e-8:
+                  normalized_diff = (trigger_output_diff - min_diff) / (max_diff - min_diff + 1e-8)
+             else:
+                  normalized_diff = torch.zeros_like(trigger_output_diff, device=trigger_output_diff.device)
+
+             grid_trigger_diff = make_grid(normalized_diff, nrow=num_samples_to_show, normalize=False)
+             writer.add_image(f'Stage2_Visualization/Epoch_Step_{step}/TriggerNet_Output_Difference_Seq{vis_step}', grid_trigger_diff, step)
+        else:
+             print(f"Warning: TriggerNet output difference map is empty. Skipping difference visualization.")
+    elif processed_adv_trigger_output is not None:
+         print(f"Warning: Adversarial TriggerNet output shape {processed_adv_trigger_output.shape} does not match original shape {processed_orig_trigger_output.shape}. Skipping adversarial TriggerNet output and difference visualization.")
 
 # 示例用法 (在训练或评估脚本中): # 添加注释以说明示例用途
 # from utils.vis_utils import visualize_training_losses, visualize_perturbation_norms, visualize_samples_and_outputs, visualize_attention_maps

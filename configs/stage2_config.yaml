@@ -26,30 +26,42 @@ model:
     base_channels: 64
   atn:
     # 1. 指向真实的权重文件
-    model_path: "models/full_atn/iris_transformers_ac_5_ce_4bn_20f_best.pth"
-    
-    # 2. (新增) IrisBabelModel 初始化所需的参数
+    # model_path: "models/full_atn/iris_transformers_ac_5_ce_4bn_20f_best.pth" # This was misleading, remove or clarify
+
+    # (新增) Perception Layer (IrisXeonNet) 的权重路径
+    perception_layer_path: "models/feature_heads/axis_transformers_13_ce_4bn_20f_best.pth"
+    # (新增) AttentionTransformer 和 TriggerNet 的权重路径
+    attention_transformer_path: "models/full_atn/iris_transformers_ac_5_ce_4bn_20f_best.pth" # Assuming this is correct for AttentionTransformer
+    trigger_net_path: "models/full_atn/iris_trigger_ac_fl_6_ce_4bn_15f.pth" # Assuming this is correct for TriggerNet
+
+    # 2. IrisBabelModel 初始化所需的参数 (可能已不再需要，但保留以便参考)
     memory_length: 1024
     num_mid_dim: 512
     num_actions: 5
     num_targets: 20
-    # (新增) ATN 模型输入形状和结构参数
-    atn_in_channels: 3
-    atn_sequence_length: 5
-    atn_height: 256
-    atn_width: 256
-    atn_num_heads: 8
-    
-    # 3. (新增) 合成决策图所需的尺寸信息
-    # 你的数据尺寸是 256x256，但决策图可能是在一个更小的特征图上产生的。
-    # 你需要和开发者确认决策坐标(x,y)对应的特征图尺寸。这里先假设是 81x81。
+    # (新增) ATN 模型输入形状和结构参数 (注意：这里的尺寸应与 Perception Layer 输出的特征图尺寸相关，而不是原始图像尺寸)
+    # IrisXeonNet 输出的特征图尺寸需要根据其结构确定。Stage 1 config 中的 data.channels 128 可能是指特征通道数。
+    # 假设 IrisXeonNet 输出形状是 (B, 128, T, H', W')
+    # 这些参数需要与实际模型结构匹配
+    atn_in_channels: 128 # Perception Layer 输出的通道数
+    atn_sequence_length: 5 # 序列长度 (应与 data.sequence_length 相同)
+    # 需要确认 IrisXeonNet 输出的 H', W' 尺寸，通常是原始图像尺寸经过下采样得到
+    # 例如，如果 IrisXeonNet 下采样了 4 倍，且输入是 256x256，输出空间尺寸可能是 64x64
+    atn_height: 64 # 假设 IrisXeonNet 输出的特征图高度
+    atn_width: 64 # 假设 IrisXeonNet 输出的特征图宽度
+    atn_num_heads: 8 # AttentionTransformer 的头数 (用于模型实例化)
+
+    # 3. (新增) 合成决策图所需的尺寸信息 (这些可能与 TriggerNet 输出的网格尺寸相关)
+    # 根据 test.py，TriggerNet 输出可能与原始网格 (lw-1) x (lh-1) 相关，经过 resize 到 81x81 的区域
+    # decision_map_height 和 decision_map_width 可能应是 TriggerNet 最终输出的空间尺寸
+    # 如果 TriggerNet 直接输出一个空间网格的预测 (例如 81x81)，这些参数可能有用
     decision_map_height: 81
     decision_map_width: 81
 
 # 训练配置
 training:
   train_stage: 2
-  batch_size: 2 # 从一个较小的值开始，以防显存溢出
+  batch_size: 1 # 2都扛不住【捂脸】，不用改了
   num_epochs: 1
   lr_g: 0.0005
   lr_d: 0.0005
@@ -81,11 +93,12 @@ training:
 # 损失配置
 losses:
   gan_type: "lsgan"
-  decision_loss_type: "mse"
-  attention_loss_type: "topk" # 或 "kl_div"
-  decision_loss_weight: 500.0 # 启用决策损失
-  attention_loss_weight: 1.0 # 启用注意力损失
-  topk_k: 10
+  # decision_loss_type 可能是用于 TriggerNet 输出的攻击损失类型
+  decision_loss_type: "mse" # mse, l1, kl, js, crossentropy (根据 TriggerNet 输出类型调整)
+  attention_loss_type: "topk" # 或 "kl_div" (用于攻击 AttentionTransformer 输出)
+  decision_loss_weight: 500.0 # 启用决策损失 (用于攻击 TriggerNet 输出)
+  attention_loss_weight: 1.0 # 启用注意力损失 (用于攻击 AttentionTransformer 输出)
+  topk_k: 10 # Top-K 参数
   gan_loss_weight: 1.0
 
 # 正则化配置 (从 Stage 1 复制)
@@ -105,8 +118,11 @@ mask:
 evaluation:
   num_eval_samples: 32 # 评估时使用的样本数量/批次大小
   eval_interval: 50 # 每隔多少个 epoch 进行一次评估
-  success_threshold: 0.1
-  success_criterion: "mse_diff_threshold"
+  success_threshold: 0.1 # 攻击成功阈值 (根据 TriggerNet 输出和攻击目标调整)
+  success_criterion: "mse_diff_threshold" # 攻击成功判定标准 (根据 TriggerNet 输出和攻击目标调整)
+  # 添加针对 AttentionTransformer 输出的评估指标和标准
+  attention_success_threshold: 0.1
+  attention_success_criterion: "topk_position_change" # Example criterion for attention
 
 # 日志配置
 logging:

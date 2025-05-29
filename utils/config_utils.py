@@ -134,7 +134,9 @@ def parse_args_and_config(default_config_path: str, task_config_arg: str = 'conf
     parser.add_argument('--data.level_json_path', type=str, help='Path to the level definition JSON file')
     parser.add_argument('--data.use_mock_data', action=argparse.BooleanOptionalAction, help='Whether to use mock data instead of real video data')
     parser.add_argument('--data.mock_num_samples', type=int, help='Number of mock samples to generate if using mock data')
-    parser.add_argument('--model.atn.model_path', type=str, help='Path to the ATN model or feature head weights.')
+    parser.add_argument('--model.atn.perception_layer_path', type=str, help='Path to the Perception Layer (IrisXeonNet) weights.')
+    parser.add_argument('--model.atn.attention_transformer_path', type=str, help='Path to the AttentionTransformer weights.')
+    parser.add_argument('--model.atn.trigger_net_path', type=str, help='Path to the TriggerNet weights.')
     parser.add_argument('--model.discriminator.type', type=str, choices=['cnn', 'patchgan'], help='Type of discriminator')
     parser.add_argument('--training.batch_size', type=int, help='Batch size for training')
     parser.add_argument('--training.num_epochs', type=int, help='Number of training epochs')
@@ -144,14 +146,16 @@ def parse_args_and_config(default_config_path: str, task_config_arg: str = 'conf
     parser.add_argument('--training.eval_interval', type=int, help='Evaluate model every N epochs')
     parser.add_argument('--logging.log_dir', type=str, help='Directory for TensorBoard logs')
     parser.add_argument('--logging.checkpoint_dir', type=str, help='Directory to save model checkpoints') # 注意：train_generator 中硬编码使用了 log_dir/checkpoints，这里作为示例保留
+    parser.add_argument('--logging.log_interval', type=int, help='Log metrics every N global steps')
     parser.add_argument('--logging.vis_interval', type=int, help='Visualize samples every N global steps')
     parser.add_argument('--logging.num_vis_samples', type=int, help='Number of samples to visualize')
     parser.add_argument('--logging.sequence_step_to_vis', type=int, help='Sequence step to visualize (0-indexed)')
+    parser.add_argument('--logging.num_vis_heads', type=int, help='Number of attention heads to visualize')
     parser.add_argument('--losses.gan_type', type=str, choices=['bce', 'lsgan'], help='Type of GAN loss')
     parser.add_argument('--losses.gan_loss_weight', type=float, help='Weight for GAN loss in generator total loss')
     # 阶段1 特有参数 (特征攻击) 或 阶段2 通用参数 (决策攻击)
-    parser.add_argument('--losses.decision_loss_type', type=str, choices=['mse', 'l1'], help='Type of decision loss (Stage 1: Feature Attack, Stage 2: Decision Map Attack)')
-    parser.add_argument('--losses.decision_loss_weight', type=float, help='Weight for decision loss (Stage 1: Feature Attack, Stage 2: Decision Map Attack)')
+    parser.add_argument('--losses.decision_loss_type', type=str, choices=['mse', 'l1', 'kl', 'js', 'crossentropy'], help='Type of decision loss (Stage 1: Feature Attack, Stage 2: Decision Map Attack or TriggerNet Output Attack)') # Added crossentropy option
+    parser.add_argument('--losses.decision_loss_weight', type=float, help='Weight for decision loss (Stage 1: Feature Attack, Stage 2: Decision Map Attack or TriggerNet Output Attack)')
     # 阶段2 特有参数 (注意力攻击)
     parser.add_argument('--losses.attention_loss_type', type=str, choices=['mse', 'l1', 'kl', 'js', 'topk', 'cosine', 'none'], help='Type of attention loss (Stage 2 only)')
     parser.add_argument('--losses.attention_loss_weight', type=float, help='Weight for attention loss (Stage 2 only)')
@@ -161,11 +165,13 @@ def parse_args_and_config(default_config_path: str, task_config_arg: str = 'conf
     parser.add_argument('--regularization.lambda_tv', type=float, help='Weight for total variation loss')
     parser.add_argument('--regularization.lambda_l2_penalty', type=float, help='Weight for L2 penalty on generator parameters')
     parser.add_argument('--evaluation.eval_interval', type=int, help='Evaluate model every N epochs')
-    parser.add_argument('--evaluation.num_eval_batches', type=int, help='Number of batches to use for evaluation')
+    parser.add_argument('--evaluation.num_eval_samples', type=int, help='Number of samples to use for evaluation') # Changed from num_eval_batches to num_eval_samples for consistency
     parser.add_argument('--evaluation.success_threshold', type=float, help='Threshold for attack success in evaluation')
-    parser.add_argument('--evaluation.success_criterion', type=str, choices=['mse_diff_threshold', 'mean_change_threshold', 'topk_value_drop', 'topk_position_change'], help='Criterion for attack success in evaluation')
+    parser.add_argument('--evaluation.success_criterion', type=str, choices=['mse_diff_threshold', 'mean_change_threshold', 'topk_value_drop', 'topk_position_change', 'classification_change'], help='Criterion for attack success in evaluation (for TriggerNet output)') # Added classification_change
     parser.add_argument('--evaluation.attention_success_criterion', type=str, choices=['mse_diff_threshold', 'mean_change_threshold', 'topk_value_drop', 'topk_position_change', 'none'], help='Criterion for attention attack success in evaluation (Stage 2 only)')
     parser.add_argument('--evaluation.attention_success_threshold', type=float, help='Threshold for attention attack success in evaluation (Stage 2 only)')
+    parser.add_argument('--evaluation.primary_metric', type=str, help='Primary evaluation metric name for saving best model')
+    parser.add_argument('--evaluation.primary_metric_lower_is_better', action=argparse.BooleanOptionalAction, help='Whether the primary evaluation metric is better when lower')
 
 
     # 解析所有参数，包括之前未知的参数 (它们现在应该能被新parser识别)
