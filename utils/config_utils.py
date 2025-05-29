@@ -26,7 +26,12 @@ def load_config(config_path: str) -> edict:
         config = yaml.safe_load(f)
         
     # 将加载的字典转换为 EasyDict 对象，支持通过点号访问属性
-    return edict(config)
+    cfg_edict = edict(config)
+    # Add this print statement
+    if 'training' in cfg_edict and 'batch_size' in cfg_edict.training:
+        print(f"DEBUG: Inside load_config for {config_path}: training.batch_size = {cfg_edict.training.batch_size}")
+
+    return cfg_edict
 
 def merge_configs(base: edict, new: edict) -> edict:
     """
@@ -81,7 +86,6 @@ def parse_args_and_config(default_config_path: str, task_config_arg: str = 'conf
     # 2. 加载默认配置
     try:
         cfg = load_config(default_config_path)
-        # 转换为 EasyDict 以便后续合并和点号访问
         cfg = edict(cfg)
     except FileNotFoundError as e:
         # 如果默认配置找不到，打印错误并返回 None
@@ -95,7 +99,6 @@ def parse_args_and_config(default_config_path: str, task_config_arg: str = 'conf
         print(f"Loading task-specific configuration from: {task_config_path}")
         try:
             task_cfg = load_config(task_config_path)
-            # 递归合并特定任务配置到默认配置中
             cfg = merge_configs(cfg, task_cfg)
         except Exception as e:
              # 如果加载或合并任务配置出错，打印警告，继续使用当前已加载的配置

@@ -49,8 +49,8 @@ model:
 # 训练配置
 training:
   train_stage: 2
-  batch_size: 1 # 从一个较小的值开始，以防显存溢出
-  num_epochs: 10
+  batch_size: 2 # 从一个较小的值开始，以防显存溢出
+  num_epochs: 1
   lr_g: 0.0005
   lr_d: 0.0005
   b1: 0.5
@@ -63,8 +63,8 @@ training:
   discriminator_weights_path: null
   resume_checkpoint: null
   
-  eval_interval: 5
-  save_interval: 5
+  eval_interval: 1
+  save_interval: 1
   dynamic_gan_balance:
     enabled: true
     strategy: "loss_ratio_freq_adjust"

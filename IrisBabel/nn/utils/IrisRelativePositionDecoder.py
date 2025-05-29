@@ -1,4 +1,5 @@
-from torch import nn
+import torch
+import torch.nn as nn
 
 class IrisRelativePositionDecoder(nn.Module):
     def __init__(self, input_dim=4096):
@@ -12,4 +13,7 @@ class IrisRelativePositionDecoder(nn.Module):
     def forward(self, x):
         mid = self.projection (x) + self.shortcut(x)
         output = self.sigmoid(mid)
-        return output.cpu().view(2)
+        output_cpu = output.cpu()
+        x_coords = output_cpu[:, 0]
+        y_coords = output_cpu[:, 1]
+        return x_coords, y_coords

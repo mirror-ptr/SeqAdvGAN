@@ -383,15 +383,15 @@ def train(cfg: Any) -> None: # 使用 Any 类型提示 cfg，因为它通常是 
             reg_loss_l_inf = torch.tensor(0.0, device=device)
             if cfg.regularization.lambda_l_inf > 0:
                  # Check L-inf norm on delta_for_G
-                 reg_loss_l_inf = cfg.regularization.lambda_l_inf * linf_norm(delta_for_G)
+                 reg_loss_l_inf = cfg.regularization.lambda_l_inf * linf_norm(delta_for_G).mean()
 
             reg_loss_l2 = torch.tensor(0.0, device=device)
             if cfg.regularization.lambda_l2 > 0:
-                 reg_loss_l2 = cfg.regularization.lambda_l2 * l2_norm(delta_for_G) # L2 norm of the pixel delta
+                 reg_loss_l2 = cfg.regularization.lambda_l2 * l2_norm(delta_for_G).mean()
 
             reg_loss_tv = torch.tensor(0.0, device=device)
             if cfg.regularization.lambda_tv > 0:
-                 reg_loss_tv = cfg.regularization.lambda_tv * total_variation_loss(delta_for_G) # TV loss on the pixel delta
+                 reg_loss_tv = cfg.regularization.lambda_tv * total_variation_loss(delta_for_G).mean()
 
             reg_loss_l2_params = torch.tensor(0.0, device=device)
             if cfg.regularization.lambda_l2_penalty > 0:
@@ -401,9 +401,15 @@ def train(cfg: Any) -> None: # 使用 Any 类型提示 cfg，因为它通常是 
                         gen_l2_reg += torch.norm(param, 2)**2
                 reg_loss_l2_params = cfg.regularization.lambda_l2_penalty * gen_l2_reg
 
+            # gen_attack_loss_stage2 might be (B,), take mean if necessary
+            # Check the implementation of AttackLosses.get_generator_attack_loss
+            # If it returns a (B,) tensor, add .mean() here
+            # For safety, let's assume it might return (B,) and add .mean()
+            gen_attack_loss_stage2_scalar = gen_attack_loss_stage2.mean() if gen_attack_loss_stage2.ndim > 0 else gen_attack_loss_stage2
+
             # Combine all Generator losses
             # Stage 2 total loss includes GAN loss, Attack loss (Decision/Attention), and Regularization
-            gen_total_loss = cfg.losses.gan_loss_weight * gen_gan_loss + gen_attack_loss_stage2 + reg_loss_l_inf + reg_loss_l2 + reg_loss_tv + reg_loss_l2_params
+            gen_total_loss = cfg.losses.gan_loss_weight * gen_gan_loss + gen_attack_loss_stage2_scalar + reg_loss_l_inf + reg_loss_l2 + reg_loss_tv + reg_loss_l2_params
 
             # Backpropagate Generator loss and update parameters (conditional on G_freq)
             if dynamic_balance_enabled and (global_step % current_G_freq == 0):
