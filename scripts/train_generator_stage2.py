@@ -82,7 +82,7 @@ def train(cfg: Any) -> None:
         sys.exit(1)
         
     # 验证 ATN 模型组件是否加载成功
-    required_components = ['xeon_net', 'attention_transformer', 'trigger_net']
+    required_components = ['attention_transformer', 'trigger_net']
     for component in required_components:
         if component not in atn_model_dict or atn_model_dict[component] is None:
             print(f"错误：atn_model_dict 中缺少或为 None 的 ATN 组件: {component}")
@@ -286,8 +286,12 @@ def train(cfg: Any) -> None:
 
         # 训练一个 epoch
         for i, batch_data in tqdm(enumerate(train_dataloader), total=len(train_dataloader), desc=f"Epoch {epoch}/{cfg.training.num_epochs}"):
-            # batch_data 来自 DataLoader，其形状应该是 (B, C, T, H, W)
-            real_x = batch_data.to(device) # 原始图像
+            # batch_data 来自 DataLoader，其形状应该是 (B, T, H, W, C)
+            real_x = batch_data.to(device) # 原始图像，形状 (B, T, H, W, C)
+
+            # Permute real_x to (B, C, T, H, W) for models that expect this format (Generator, Discriminator)
+            # The original shape is (B, T, H, W, C)
+            real_x_permuted = real_x.permute(0, 4, 1, 2, 3) # (B, T, H, W, C) -> (B, C, T, H, W)
 
             # --- 训练判别器 (Discriminator) ---
             # 根据动态平衡或固定频率决定是否训练 D
@@ -302,17 +306,22 @@ def train(cfg: Any) -> None:
 
                 # 1. 生成器生成像素级扰动 delta
                 with torch.no_grad():  # D 训练时不需要 G 的梯度
-                    delta = generator(real_x)  # delta 形状: (B, 3, T, H, W)
+                    # Generator expects (B, C, T, H, W), needs permuted input
+                    delta = generator(real_x_permuted)  # delta 形状: (B, 3, T, H, W) # <-- 传入 permuted input
                     # 约束 delta 到 epsilon 球内 (L-inf 范数)
                     delta = torch.clamp(delta, -cfg.model.generator.epsilon, cfg.model.generator.epsilon)
-                    # 生成对抗图像
-                    adversarial_x = real_x + delta
+                    # 生成对抗图像 (Add delta to original real_x, both should be in the same format)
+                    # Ensure real_x_permuted is used for addition to match delta's shape
+                    # Or, permute delta back to (B, T, H, W, C) before adding to real_x
+                    # Let's keep delta in (B, C, T, H, W) and add to real_x_permuted
+                    adversarial_x_permuted = real_x_permuted + delta
                     # 确保对抗图像在有效范围内 [0, 1]
-                    adversarial_x = torch.clamp(adversarial_x, 0, 1)
+                    adversarial_x_permuted = torch.clamp(adversarial_x_permuted, 0, 1)
 
                 # 2. 判别器判别
-                D_real_output = discriminator(real_x)  # 真实图像的判别器输出
-                D_fake_output = discriminator(adversarial_x.detach())  # 对抗图像的判别器输出 (detach 以阻止梯度回传到 G)
+                # Discriminator expects (B, C, T, H, W), needs permuted input
+                D_real_output = discriminator(real_x_permuted)  # 真实图像的判别器输出 # <-- 传入 permuted input
+                D_fake_output = discriminator(adversarial_x_permuted.detach())  # 对抗图像的判别器输出 (detach 以阻止梯度回传到 G) # <-- 传入 permuted input
 
                 # 3. 计算判别器损失
                 d_total_loss, d_real_loss, d_fake_loss = gan_losses.discriminator_loss(
@@ -335,35 +344,39 @@ def train(cfg: Any) -> None:
                 optimizer_G.zero_grad()
 
                 # 1. 生成器生成像素级扰动
-                delta_for_G = generator(real_x)  # delta 形状: (B, 3, T, H, W)
+                # Generator expects (B, C, T, H, W), needs permuted input
+                delta_for_G = generator(real_x_permuted)  # delta 形状: (B, 3, T, H, W) # <-- 传入 permuted input
                 delta_for_G = torch.clamp(delta_for_G, -cfg.model.generator.epsilon, cfg.model.generator.epsilon)
-                # 生成对抗图像
-                adversarial_x_for_G = real_x + delta_for_G
-                adversarial_x_for_G = torch.clamp(adversarial_x_for_G, 0, 1)
+                # 生成对抗图像 (Add delta to real_x_permuted)
+                adversarial_x_for_G_permuted = real_x_permuted + delta_for_G
+                adversarial_x_for_G_permuted = torch.clamp(adversarial_x_for_G_permuted, 0, 1)
 
                 # 2. 获取 ATN 模型输出 - 完整的数据流 (用于计算攻击损失)
-                # ATN 模型是冻结的，但对于对抗样本，我们需要计算梯度。
-                # 对于原始图像，可以禁用梯度计算以节省内存和计算。
+                # ATN 模型 (AttentionTransformer, TriggerNet) 期望 (B, T, H, W, C) 输入
+                # We need the original real_x and adversarial_x_for_G (in BTHWC format) for ATN models
                 
                 # 获取原始图像的 ATN 输出 ( TriggerNet 输出，无梯度)
                 with torch.no_grad():
                     original_atn_outputs = get_atn_outputs(
                         atn_model_dict,
-                        real_x, # 输入原始图像
+                        real_x, # <-- 传入原始形状 (B, T, H, W, C)
                         cfg=cfg,
                         device=device # 传递设备信息
                     )
 
                 # 获取对抗图像的 ATN 输出 ( TriggerNet 输出，需要梯度)
+                # Permute adversarial_x_for_G_permuted back to (B, T, H, W, C) for ATN models
+                adversarial_x_for_G_original_format = adversarial_x_for_G_permuted.permute(0, 2, 3, 4, 1) # (B, C, T, H, W) -> (B, T, H, W, C)
                 adversarial_atn_outputs = get_atn_outputs(
                     atn_model_dict,
-                    adversarial_x_for_G, # 输入对抗图像
+                    adversarial_x_for_G_original_format, # <-- 传入原始形状 (B, T, H, W, C)
                     cfg=cfg,
                     device=device # 传递设备信息
                 )
 
                 # 3. 计算生成器 GAN 损失
-                D_fake_output_for_G = discriminator(adversarial_x_for_G) # 对抗图像送入判别器 (需要梯度)
+                # Discriminator expects (B, C, T, H, W), needs permuted input
+                D_fake_output_for_G = discriminator(adversarial_x_for_G_permuted) # 对抗图像送入判别器 (需要梯度) # <-- 传入 permuted input
                 gen_gan_loss = gan_losses.generator_loss(D_fake_output_for_G)
 
                 # 4. 计算生成器攻击损失 (Stage 2: 攻击 TriggerNet 输出)

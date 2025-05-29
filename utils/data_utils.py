@@ -318,9 +318,9 @@ class GameVideoDataset(Dataset):
              # Debug 日志：__getitem__ 索引 {} - Stacked sequence, shape before final permute: {}
              # print(f"Debug: __getitem__ index {idx} - Stacked sequence, shape before final permute: {sequence_tensor.shape}") # Debug print
 
-             # Permute dimension to model expected shape (C, T, H, W)
-             # Model usually expects input shape (B, C, N, H, W), where N is sequence length T
-             sequence_tensor = sequence_tensor.permute(1, 0, 2, 3) # (C, T, H, W) -> (C, T, H, W) if already TCHW after stack, this permute changes nothing? No, stack is by default on dim 0, so (T, C, H, W). Permute(1, 0, 2, 3) makes it (C, T, H, W).
+             # Permute dimension to match test.py expected shape (T, H, W, C)
+             # Input frames are currently (T, C, H, W)
+             sequence_tensor = sequence_tensor.permute(0, 2, 3, 1) # (T, C, H, W) -> (T, H, W, C)
              # Debug 日志：__getitem__ 索引 {} - Stacked and permuted sequence, final shape: {} 理应是 (C, T, H, W) 才能匹配后续模型输入 (B, C, T, H, W)
              # print(f"Debug: __getitem__ index {idx} - Stacked and permuted sequence, final shape: {sequence_tensor.shape}") # Debug print before return
 

@@ -56,6 +56,8 @@ class IrisXeonWeight(nn.Module):
         x1 = self.relu2(x1)
         x1 = self.dropout5(x1)
         x1 = torch.mean(x1, dim = 2)
+        x1 = torch.permute(x1, (0, 2, 3, 1))
         x1 = self.norm3(x1)
+        x1 = torch.permute(x1, (0, 3, 1, 2))
         x1 = self.relu3(x1)
         return x1
