@@ -4,12 +4,12 @@
 
 本项目 **SeqAdvGAN** （**Seq**uence **Adv**ersarial **G**enerative **A**dversarial **N**etwork）专注于利用 **序列生成对抗网络** 对基于 **Transformer 架构** 的塔防游戏 **AI 决策模型 (Attentive-Trigger Network, ATN)** 的 **注意力机制** 进行 **对抗性攻击** 研究。
 
-我们的核心目标是训练一个 **生成器 CNN** 来生成针对五维 (Batch, Channels, Sequence, Height, Width) 图片序列输入的微小扰动，旨在误导 ATN 的决策。整个攻击过程分为两个主要阶段：
+我们已完成了第一阶段（特征层攻击）的基础工作，目前项目正聚焦于 **第二阶段（像素级攻击）** 的训练和调试。我们核心目标是训练一个 **生成器 CNN** 来生成针对五维 (Batch, Channels, Sequence, Height, Width) 图片序列输入的微小像素扰动，旨在误导预训练且冻结的 ATN 的决策。整个攻击过程主要分为两个阶段：
 
-* **阶段一 (Phase 1)：特征层攻击**
+* **阶段一 (Phase 1)：特征层攻击 (已完成)**
     * 在这一阶段，我们着重于攻击 ATN 的**特征提取层**。通过生成精心设计的微小扰动，我们致力于最大化对抗样本在 ATN 特征提取器中产生的特征表示与原始样本特征表示之间的差异，从而使 ATN 无法正确识别原始的特征模式。
-* **阶段二 (Phase 2)：决策图和注意力机制攻击**
-    * 在成功完成第一阶段的基础上，我们将进一步探索如何直接操纵 ATN 的**最终决策图和显式序列注意力权重**。这一阶段将引入针对这些特定输出的攻击损失，旨在更精准地控制 AI 的决策逻辑和其注意力聚焦区域。
+* **阶段二 (Phase 2)：像素级攻击及决策图、注意力机制攻击 (当前重点)**
+    * 在成功完成第一阶段的基础上，我们将进一步探索如何直接操纵 ATN 的**最终决策图和显式序列注意力权重**。**本项目当前的工作重点集中在通过生成像素级的对抗扰动来实现对 ATN 决策和注意力机制的攻击。** 这一阶段将引入针对这些特定输出的攻击损失，旨在更精准地控制 AI 的决策逻辑和其注意力聚焦区域。
 
 与传统的图像对抗攻击不同，本项目聚焦于 **序列图像数据** 和具有 **注意力机制** 的复杂 AI 模型。我们不仅尝试改变最终决策，更深入探索如何 **操纵 ATN 的内部注意力聚焦区域**，这对于理解、评估和增强基于注意力的模型在对抗环境下的鲁棒性具有重要意义。
 
@@ -43,35 +43,45 @@
 
 ## 📂 项目结构 (Project Structure)
 
+以下是 SeqAdvGAN 项目的主要目录和文件结构：
+
 ```
 SeqAdvGAN/
-├── configs/                  # 项目配置目录
-│   ├── stage1_config.yaml    # 第一阶段训练配置，重点攻击 ATN 特征层
-│   └── stage2_config.yaml    # （待实现）第二阶段训练配置，重点攻击 ATN 决策和注意力
-├── models/                   # 模型定义目录
-│   ├── generator_cnn.py      # 生成器模型 (基于 3D CNN 的编码-解码架构)
-│   ├── discriminator_cnn.py  # 判别器模型 (传统 CNN 结构)
-│   ├── discriminator_patchgan.py # PatchGAN 判别器模型
-│   ├── feature_heads/        # 存放预训练 ATN 特征头模型权重
-│   │   └── iris_feature_13_ce_4bn_20f_best.pth # ATN 特征头模型权重文件
-│   └── atn_components/       # （推荐）存放实际 ATN 模型及其依赖的自定义模块文件
-│       └── your_atn_model_definition.py # (待补充) 您的实际 ATN 模型类定义文件 (例如 AttentiveTriggerNetwork)
-│       └── iris_babel_module.py # (待补充) 如果 ATN 模型依赖 IrisBabel 或其他自定义模块，请放置在此
+├── configs/                  # 训练和模型配置目录
+│   ├── stage1_config.yaml    # 第一阶段训练配置
+│   └── stage2_config.yaml    # 第二阶段训练配置 (当前训练使用)
+├── data/                     # 数据文件存放目录 (例如视频文件)
+├── doc/                      # 文档目录 (例如集成与调试总结)
+├── IrisArknights/            # 子模块：塔防游戏相关工具库 (例如 Level 解析, 图像变换)
+├── IrisBabel/                # 子模块：预训练的 ATN 模型库及其组件
 ├── losses/                   # 损失函数定义目录
-│   ├── gan_losses.py         # GAN 损失函数实现 (如 BCE, LSGAN)
-│   ├── attack_losses.py      # 攻击损失函数，包含分阶段的特征层和注意力攻击逻辑
-│   └── regularization_losses.py # 正则化损失函数 (如 L-inf, L2, TV, L2 Penalty)
-├── utils/                    # 辅助工具函数目录
-│   ├── atn_utils.py          # ATN 模型加载、初始化和输出获取工具 (需集成实际 ATN 模型代码)
-│   ├── config_utils.py       # 配置加载和命令行参数解析工具
-│   ├── data_utils.py         # 数据加载工具 (GameVideoDataset for video processing)
-│   ├── eval_utils.py         # 评估指标计算工具，包含攻击成功率及感知指标
-│   └── vis_utils.py          # TensorBoard 可视化工具
+│   ├── attack_losses.py      # 攻击损失函数
+│   ├── gan_losses.py         # GAN 损失函数
+│   └── regularization_losses.py # 正则化损失函数
+├── models/                   # 模型定义目录
+│   ├── generator_cnn.py      # 生成器模型
+│   ├── discriminator_cnn.py  # CNN 判别器模型
+│   ├── discriminator_patchgan.py # PatchGAN 判别器模型
+│   ├── bottleneck3d.py       # 3D Bottleneck 模块定义
+│   └── layers.py             # 其他自定义层 (例如 Lambda)
+├── resources/                # 资源文件目录 (例如关卡 JSON 文件)
+├── runs/                     # 训练运行输出目录 (TensorBoard 日志, 检查点等)
 ├── scripts/                  # 运行脚本目录
-│   ├── train_generator.py    # 主训练脚本，用于训练生成器和判别器
-│   ├── evaluate_attack.py    # 独立评估攻击效果的脚本
-│   └── visualize_results.py  # 独立可视化结果的脚本
+│   ├── train_generator_stage2.py # 第二阶段主训练脚本 (当前使用)
+│   ├── train_generator.py    # (旧) 主训练脚本
+│   ├── evaluate_attack.py    # 攻击效果评估脚本
+│   └── visualize_results.py  # 结果可视化脚本
+├── utils/                    # 辅助工具函数目录
+│   ├── atn_utils.py          # ATN 模型加载和输出获取工具
+│   ├── config_utils.py       # 配置加载工具
+│   ├── data_utils.py         # 数据加载工具 (GameVideoDataset)
+│   ├── eval_utils.py         # 评估指标计算工具
+│   └── vis_utils.py          # TensorBoard 可视化工具
+├── .gitattributes            # Git 属性配置
+├── .gitignore                # Git 忽略文件配置
+├── requirements.txt          # Python 依赖列表
 └── README.md                 # 项目说明文档
+
 ```
 
 ## 🚀 快速开始 (Quick Start)
@@ -117,11 +127,12 @@ SeqAdvGAN/
 
 ### 3. 开始训练 (第一阶段：特征层攻击)
 
-运行以下命令开始 SeqAdvGAN 的第一阶段训练：
+第一阶段的基础集成和部分训练已完成。如需运行，请使用以下命令：
 
 ```bash
 python scripts/train_generator.py --config configs/stage1_config.yaml
 ```
+
 训练监控: 训练过程中的日志、模型检查点和 TensorBoard 可视化数据将保存到 runs/ 和 checkpoints/ 目录下（可在配置文件中调整）。
 
 实时查看训练进度: 您可以使用 TensorBoard 实时监控训练进度和可视化结果。在另一个终端中，导航到您的项目根目录，然后运行：
@@ -135,35 +146,41 @@ tensorboard --logdir runs/stage1_train # 或在 config 中设置的 logging.log_
 /home/xianke/miniconda3/envs/seqadvgan_env/bin/tensorboard --logdir runs/stage1_train # 将路径替换为您实际的环境路径
 ```
 
+### 开始训练 (第二阶段：像素级攻击)
+
+目前项目的重点是进行第二阶段的训练。运行以下命令开始 SeqAdvGAN 的第二阶段训练。请确保 `configs/stage2_config.yaml` 配置正确，特别是 ATN 模型路径指向完整的 ATN 模型权重。
+
+```bash
+python scripts/train_generator_stage2.py --config configs/stage2_config.yaml
+```
+第二阶段的训练目标是攻击 ATN 的决策图和注意力机制，相关的损失函数和评估指标权重需要在 `configs/stage2_config.yaml` 中配置（例如 `losses.decision_loss_weight` 和 `losses.attention_loss_weight` ）。请注意，训练脚本为 `train_generator_stage2.py`。
+
+**实时查看第二阶段训练进度:**
+```bash
+tensorboard --logdir runs/stage2_train # 或在 config 中设置的 logging.log_dir for stage2
+```
+
 ### 4. 训练参数配置
 
-训练参数可以在 `configs/stage1_config.yaml` 中进行详细配置。常用的可配置项包括：
+训练参数可以在 `configs/stage2_config.yaml` 或 `configs/stage1_config.yaml` 中进行详细配置，具体取决于您运行的训练阶段。常用的可配置项包括：
 
 *   `training.num_epochs`: 训练的总 epoch 数量。
 *   `training.batch_size`: 批处理大小 (根据您的 GPU 显存调整，过大可能导致 OOM 错误)。
 *   `training.lr_g`, `training.lr_d`: 生成器和判别器的学习率。
-*   `model.generator.epsilon`: L-inf 范数约束的最大扰动值，控制扰动强度。
-*   `losses.decision_loss_weight`: 特征层攻击损失的权重（第一阶段主要关注此项）。
+*   `model.generator.epsilon`: L-inf 范数约束的最大扰动值，控制扰动强度（主要用于第二阶段）。
+*   `losses.decision_loss_weight`: 攻击损失的权重。在第一阶段用于特征层差异，在第二阶段用于 TriggerNet 输出差异。
+*   `losses.attention_loss_weight`: 注意力攻击损失的权重（主要用于第二阶段，如果实现）。
 *   `regularization.lambda_l_inf`, `lambda_l2`, `lambda_tv`, `lambda_l2_penalty`: 各种正则化项的权重，用于约束扰动质量。
 
-**重要提示：** 请确保您使用的配置文件（例如 `configs/stage1_config.yaml` 或 `configs/stage2_config.yaml`）包含了脚本所需的所有必要参数，特别是：
-- ATN 模型加载相关的参数（在 `model.atn` 部分，例如 `model_path`, `memory_length`, `num_mid_dim`, `num_actions`, `num_targets`, 以及新增的 `atn_in_channels`, `atn_sequence_length`, `atn_height`, `atn_width`, `atn_num_heads`）。
-- 数据加载相关的参数（在 `data` 部分，例如 `video_path`, `level_json_path`, `sequence_length`, `channels`, `height`, `width`, `num_workers`, 以及新增的 `use_mock_data`）。
-- 评估相关的参数（新增的 `evaluation` 部分，例如 `num_eval_samples`, `eval_interval`）。
+**重要提示：** 请确保您使用的配置文件（例如 `configs/stage2_config.yaml`）包含了脚本所需的所有必要参数，特别是：
+- ATN 模型加载相关的参数（在 `model.atn` 部分）。
+- 数据加载相关的参数（在 `data` 部分）。
+- 评估相关的参数（在 `evaluation` 部分）。
 缺失或错误的参数可能导致 `AttributeError` 或其他运行时错误。
 
-更多详细配置请参考 `configs/stage1_config.yaml` 文件。
+更多详细配置请参考相应的配置文件。
 
 **注意:** 如果训练过程中遇到 `Killed` 错误，通常是显存或内存不足，请 **显著减小 `--batch_size`**。
-
-### 开始训练 (第二阶段：决策图和注意力机制攻击)
-
-运行以下命令开始 SeqAdvGAN 的第二阶段训练。请确保 `configs/stage2_config.yaml` 配置正确，特别是 ATN 模型路径指向完整的 ATN 模型权重。
-
-```bash
-python scripts/train_generator.py --config configs/stage2_config.yaml
-```
-第二阶段的训练目标是攻击 ATN 的决策图和注意力机制，相关的损失函数和评估指标权重需要在 `configs/stage2_config.yaml` 中配置（例如 `losses.decision_loss_weight` 和 `losses.attention_loss_weight` ）。
 
 ### 📈 可视化结果 (`scripts/visualize_results.py`)
 
@@ -209,6 +226,8 @@ python scripts/visualize_results.py \
     *   `PSNR` (`PSNR_Avg`), `SSIM` (`SSIM_Avg`) 和 `LPIPS` (`LPIPS_Avg`) （框架已搭建，依赖 `piq` 库），用于衡量对抗样本与原始样本在视觉感知上的差异，进一步确保扰动的隐蔽性。
 
 **请注意，在第一阶段的训练和评估中，主要关注的是对 ATN 特征层的攻击效果，因此 `Attack_Success_Rate_Feature_Stage1` 是核心评估指标。**
+
+**在第二阶段的训练和评估中，主要关注的是对 ATN TriggerNet 输出（决策）的像素级攻击效果，核心评估指标包括 `Attack_Success_Rate_TriggerNet` 以及衡量扰动隐蔽性的指标。**
 
 ## 💡 未来工作 (Future Work)
 
