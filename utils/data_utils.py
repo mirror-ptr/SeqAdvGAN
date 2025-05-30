@@ -10,7 +10,26 @@ from typing import Optional, Tuple, Any, Dict, List # Import type hints: Optiona
 
 from IrisArknights import calculate_transform_matrix, transform_image, Level
 
-# 定义 worker 初始化函数，用于在每个数据加载 worker 进程中初始化资源 (如 cv2.VideoCapture)
+# Define a custom collate function to filter out None values
+def collate_fn_skip_none(batch):
+    """
+    Custom collate function that filters out None values from the batch
+    and uses default_collate for the remaining items. Handles empty batches.
+    """
+    # Filter out None values from the batch
+    batch = [item for item in batch if item is not None]
+    
+    # If the batch is empty after filtering, return an empty tensor.
+    # Returning a simple empty tensor like torch.empty(0) prevents the TypeError in DataLoader.
+    if not batch:
+        import torch # Ensure torch is available
+        return torch.empty(0)
+        
+    # Use default_collate on the valid samples
+    import torch.utils.data._utils.collate
+    return torch.utils.data._utils.collate.default_collate(batch)
+
+# Define worker initialization function for multiprocessing DataLoaders
 def worker_init_fn(worker_id: int) -> None:
     """
     初始化 cv2.VideoCapture 实例，使其与 DataLoader 的每个 worker 进程关联。
@@ -20,40 +39,12 @@ def worker_init_fn(worker_id: int) -> None:
     Args:
         worker_id (int): 当前 worker 进程的唯一 ID。
     """
-    # Explicitly import numpy here to ensure it's available in the worker process
-    import numpy as np # Explicitly import numpy in the worker init function
-
-    # 获取当前 worker 的信息
-    worker_info = torch.utils.data.get_worker_info()
-    # worker_info.dataset 属性持有 DataLoader 所使用的数据集实例 (在这里是 GameVideoDataset)
-    dataset = worker_info.dataset # dataset is the instance of GameVideoDataset
-
-    # 为当前 worker 创建一个独立的 VideoCapture 实例，并将其附加到 dataset 对象上
-    # print(f"Debug: Worker {worker_id} initializing VideoCapture for {dataset.video_path}") # Debug print
-    dataset.cap = cv2.VideoCapture(dataset.video_path)
-    
-    # 检查视频文件是否成功打开
-    if not dataset.cap.isOpened():
-        # 错误信息：Worker {worker_id} 初始化 VideoCapture 失败，视频文件：{dataset.video_path}。后续读取将失败。
-        print(f"Error: Worker {worker_id} failed to open video file: {dataset.video_path}")
-        # 注意：如果文件打开失败，__getitem__ 中对 self.cap 的 read() 调用会返回 (False, None)
-        # __getitem__ 已经包含了对 ret 和 frame 的检查，会返回 None，DataLoader 会跳过。
-        # 但如果文件根本不存在，可能在 VideoCapture 构造时就抛出异常，或 isOpened() 为 False。
-
-    # 可选：为每个 worker 设置一个唯一的随机种子，如果数据加载或预处理过程中需要随机性
-    # 例如，如果使用了随机裁剪、翻转等 transform
-    # PyTorch DataLoader 会为每个 worker 提供一个种子 (基于主进程的种子 + worker_id)
-    seed = worker_info.seed
-    if seed is not None:
-        # 只有当外部 transform 需要 numpy 或 standard random 模块时才需要设置这些种子
-        # 将种子限制在 NumPy 有效范围内 [0, 2**32 - 1]
-        numpy_seed = seed % (2**32) # Take modulo 2**32 to fit within uint32 range
-        np.random.seed(numpy_seed)
-        random.seed(seed) # standard random module handles larger seeds
-        # 如果使用了 torchvision transforms 或其他依赖 torch.Generator 的 transforms，需要设置 torch 的种子
-        # torch.manual_seed(seed)
-        # if torch.cuda.is_available(): # 如果 transform 在 GPU 上运行
-        #     torch.cuda.manual_seed_all(seed)
+    # The actual VideoCapture initialization will now happen lazily in __getitem__
+    # when num_workers=0. For num_workers > 0, this function would typically
+    # initialize dataset.cap = cv2.VideoCapture(dataset.video_path).
+    # Given that worker_init_fn didn't seem to run for num_workers=0, we are
+    # temporarily bypassing its primary responsibility for this debug case.
+    pass # Keep the function definition, but no video opening logic here for now
 
 
 class GameVideoDataset(Dataset):
@@ -99,6 +90,7 @@ class GameVideoDataset(Dataset):
         
         # cv2.VideoCapture 实例：将在每个 worker 进程中由 worker_init_fn 初始化，避免多进程冲突。
         # 在主进程 __init__ 中将其初始化为 None。
+        # 如果 num_workers = 0 (单进程)，则直接在此处初始化 VideoCapture
         self.cap: Optional[cv2.VideoCapture] = None # Initialize to None
 
         # --- 1. 初始化关卡和变换矩阵 ---
@@ -133,7 +125,7 @@ class GameVideoDataset(Dataset):
         cap_init.release() # 立即释放视频捕获对象，避免资源泄露
 
         # 确认数据集初始化成功日志：初始化数据集成功，视频：{}，总帧数：{}。
-        print(f"Initialized GameVideoDataset for {self.video_path}, total frames: {self.total_frames}")
+        # print(f"Initialized GameVideoDataset for {self.video_path}, total frames: {self.total_frames}") # Removed verbose initialization print
         
         # --- 3. 创建 Resize transform 如果需要 ---
         # 如果指定了目标高度和宽度，则创建一个 Resize transform
@@ -173,7 +165,19 @@ class GameVideoDataset(Dataset):
         # Debug 日志：__getitem__ Called for index {idx}
         # print(f"Debug: __getitem__ called for index {idx}") # Debug print at start
         
-        # 使用由 worker_init_fn 在当前 worker 进程中初始化的 VideoCapture 实例
+        # Using VideoCapture instance initialized in worker_init_fn for multiprocessing.
+        # For num_workers=0 (single process), worker_init_fn might not be reliably called.
+        # Implement lazy initialization here if self.cap is None (covers num_workers=0 case primarily).
+        if self.cap is None:
+            # Debug print: Attempting lazy VideoCapture initialization in __getitem__
+            print(f"Debug: __getitem__ index {idx} - Performing lazy VideoCapture initialization for {self.video_path}")
+            self.cap = cv2.VideoCapture(self.video_path)
+            if self.cap.isOpened():
+                # print(f"Debug: __getitem__ index {idx} - Lazy VideoCapture initialization successful.") # Removed debug print
+                pass # Added pass to fix linter error
+            else:
+                print(f"Error: __getitem__ index {idx} - Lazy VideoCapture initialization failed.")
+
         # 检查 self.cap 是否已初始化且打开
         if self.cap is None or not self.cap.isOpened():
             # 如果 worker_init_fn 没有正确执行（例如视频文件不存在或损坏），这里会检测到
@@ -183,9 +187,9 @@ class GameVideoDataset(Dataset):
 
         # 设置视频帧的起始位置 (使用基于 0 的索引 'idx')
         # cv2.CAP_PROP_POS_FRAMES 属性用于设置下一个要读取的帧的索引
-        # print(f"Debug: __getitem__ index {idx} - Setting frame position to {idx}") # Debug print before set
+        # print(f"Debug: __getitem__ index {idx} - Before cap.set(POS_FRAMES, {idx})") # Debug print before set
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        # print(f"Debug: __getitem__ index {idx} - Frame position set.") # Debug print after set
+        # print(f"Debug: __getitem__ index {idx} - After cap.set(POS_FRAMES, {idx})") # Debug print after set
         
         sequence_frames: List[torch.Tensor] = [] # 用于存储读取和处理后的帧张量列表 Type hint for list of tensors
         # Debug 日志：__getitem__ 索引 {} - Starting frame read loop for {self.sequence_length} frames.
@@ -233,11 +237,7 @@ class GameVideoDataset(Dataset):
             # 转换为 PyTorch 兼容的格式 (H, W, C) 和数据类型
             # OpenCV 读取的图像是 BGR 格式的 numpy 数组 (H, W, C)，值在 [0, 255]
             # 1. 将颜色空间从 BGR (cv2 默认) 转换为 RGB
-            processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB) 
-            # 2. 将 numpy 数组 (H, W, C) 转换为 torch 张量 (H, W, C)
-            # 3. 改变张量维度顺序从 (H, W, C) 到 (C, H, W)
-            # 4. 将数据类型从 uint8 (或原始类型) 转换为 float32，以进行后续计算和归一化
-
+            processed_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
             # Debugging: Check the numpy array before converting to torch tensor
             if not isinstance(processed_frame, np.ndarray):
                 print(f"Error: __getitem__ index {idx}, frame {i} - processed_frame is not a numpy array. Type: {type(processed_frame)}")
@@ -245,11 +245,13 @@ class GameVideoDataset(Dataset):
             if processed_frame.size == 0:
                 print(f"Error: __getitem__ index {idx}, frame {i} - processed_frame is an empty numpy array. Shape: {processed_frame.shape}")
                 return None
+            # Check the number of channels after color conversion
             if processed_frame.ndim != 3 or processed_frame.shape[2] != 3:
-                 print(f"Error: __getitem__ index {idx}, frame {i} - processed_frame has unexpected shape or channels. Shape: {processed_frame.shape}")
-                 return None
-            # You could also check dtype: if processed_frame.dtype != np.uint8:
-            #     print(f"Warning: __getitem__ index {idx}, frame {i} - processed_frame has unexpected dtype: {processed_frame.dtype}")
+                # Add a specific warning if channels are not 3
+                print(f"Warning: __getitem__ index {idx}, frame {i} - processed_frame has unexpected channels after BGR2RGB conversion. Expected 3, got {processed_frame.shape[2] if processed_frame.ndim == 3 else processed_frame.ndim}. Shape: {processed_frame.shape}")
+                # Depending on desired behavior, you might return None or try to handle non-3 channels
+                # For now, let's return None if channels are not 3, as the models expect 3 channels.
+                return None # Return None if channel count is not 3
 
             # Ensure the numpy array is contiguous and writable before converting to tensor
             # This can help with multiprocessing issues
@@ -296,16 +298,19 @@ class GameVideoDataset(Dataset):
                     # Debug 日志：__getitem__ 索引 {}，帧 {} - Before external transform.
                     # print(f"Debug: __getitem__ index {idx}, frame {i} - Before external transform.") # Debug print before external transform
                     # 外部 transform 应期望输入为 (C, H, W) float 张量并返回相同格式的张量
-                    frame_tensor = self.transform(frame_tensor) 
+                    frame_tensor = self.transform(frame_tensor)
                     # Debug 日志：__getitem__ 索引 {}，帧 {} - After external transform.
                     # print(f"Debug: __getitem__ index {idx}, frame {i} - After external transform.") # Debug print after external transform
                 except Exception as e:
                     # 错误信息：__getitem__ 索引 {}，帧 {} - 外部 transform 期间出错：{}。返回 None。
-                    print(f"Error: __getitem__ index {idx}, frame {i} - Error during external transform: {e}. Returning None.")
+                    # print(f"Error: __getitem__ index {idx}, frame {i} - Error during external transform: {e}. Returning None.")
                     return None # 停止处理并返回 None
 
             # 将处理好的帧张量添加到序列列表中
             sequence_frames.append(frame_tensor)
+
+            # Debug print: Check shape and max value of each frame before stacking
+            # print(f"Debug: __getitem__ index {idx}, frame {i} - frame_tensor shape: {frame_tensor.shape}, max value: {frame_tensor.max().item()}") # Removed debug print
 
         # 将序列帧列表堆叠成一个张量 (T, C, H, W)，其中 T = sequence_length
         # 在堆叠之前，再次检查 sequence_frames 列表是否包含有效数量的张量

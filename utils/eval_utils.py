@@ -496,6 +496,84 @@ def calculate_perceptual_metrics(
 
     return metrics
 
+def calculate_image_perceptual_metrics(
+    original_images: torch.Tensor,
+    adversarial_images: torch.Tensor,
+    device: torch.device
+) -> dict:
+    """
+    计算两批图像之间的 PSNR, SSIM, LPIPS 等感知评估指标。
+
+    Args:
+        original_images (torch.Tensor): 原始图像批次 (B, C, H, W)。
+        adversarial_images (torch.Tensor): 对抗图像批次 (B, C, H, W)。
+        device (torch.device): 计算设备（例如 'cuda' 或 'cpu'）。
+
+    Returns:
+        dict: 包含感知指标的字典。如果计算失败或 piq 库不可用，相关指标的值为 NaN。
+    """
+    metrics = {}
+
+    # Check if input images are None, empty, or shapes mismatch
+    if original_images is None or adversarial_images is None or original_images.numel() == 0 or adversarial_images.numel() == 0 or original_images.shape != adversarial_images.shape:
+        print("Warning: Input images for perceptual metrics are None, empty, or shapes mismatch. Skipping perceptual metric calculations.")
+        metrics['psnr'] = float('nan')
+        metrics['lpips'] = float('nan')
+        metrics['ssim'] = float('nan')
+        return metrics
+
+    # PSNR Calculation
+    try:
+        # calculate_psnr expects input in [0, 1] range, which our images should be
+        psnr_vals = calculate_psnr(original_images, adversarial_images, data_range=1.0)
+        # calculate_psnr returns a tensor of shape (B,), take the mean, ignore NaNs
+        metrics['psnr'] = float(np.nanmean(psnr_vals.cpu().numpy())) if psnr_vals.numel() > 0 else float('nan')
+    except Exception as e:
+        print(f"Error calculating PSNR: {e}")
+        metrics['psnr'] = float('nan')
+
+    # LPIPS and SSIM Calculation (requires piq)
+    try:
+        # Attempt to import piq inside the function to avoid hard dependency if not used
+        from piq import LPIPS, ssim # type: ignore
+        piq_available = True
+        # print("piq library found for image perceptual metrics.") # Debug print
+    except ImportError:
+        # print("Warning: 'piq' library not found. Skipping LPIPS/SSIM for images.") # Debug print
+        piq_available = False
+    except Exception as e: # Catch other potential import errors
+         print(f"Warning: Error importing piq for image perceptual metrics: {e}. Skipping LPIPS/SSIM.")
+         piq_available = False
+
+    if piq_available:
+        # print("Attempting to calculate image perceptual metrics (LPIPS, SSIM) using piq...") # Debug print
+        try:
+            # LPIPS: Input range is typically [0,1] or [-1,1]. piq.LPIPS by default normalizes [0,1] to [-1,1].
+            # It requires 3-channel RGB images.
+            if original_images.shape[1] == 3:
+                 lpips_metric = LPIPS().to(device) # Initialize and move to device
+                 # LPIPS metric expects tensors on the same device as itself.
+                 # Map [0,1] to [-1,1] for LPIPS
+                 lpips_val = lpips_metric(original_images * 2 - 1, adversarial_images * 2 - 1).mean().item()
+                 metrics['lpips'] = lpips_val
+            else:
+                 print(f"Warning: LPIPS expects 3 channels for images, got {original_images.shape[1]}. Skipping LPIPS.")
+                 metrics['lpips'] = float('nan')
+
+            # SSIM: Input range typically [0,1] or [0, 255] (data_range must match). Images are [0, 1].
+            ssim_val = ssim(original_images, adversarial_images, data_range=1., reduction='mean').item()
+            metrics['ssim'] = ssim_val
+            # print("Image perceptual metrics calculation successful.") # Debug print
+        except Exception as e:
+            print(f"Error calculating LPIPS/SSIM for images using piq: {e}")
+            metrics['lpips'] = float('nan')
+            metrics['ssim'] = float('nan')
+    else: # piq not available
+        metrics['lpips'] = float('nan')
+        metrics['ssim'] = float('nan')
+
+    return metrics
+
 # --- Example of how to use in train/eval script ---
 def evaluate_model(
     generator: Optional[torch.nn.Module],
@@ -510,7 +588,7 @@ def evaluate_model(
     在评估数据集上评估生成器和判别器的性能。
 
      Args:
-        generator (Optional[torch.nn.Module]): 生成器模型。在 Stage 1 评估时需要。
+        generator (Optional[torch.nn.Module]): 生成器模型。在 Stage 1 或 Stage 2 评估时需要生成器产生的对抗样本。
         discriminator (Optional[torch.nn.Module]): 判别器模型。如果需要评估判别器性能（如得分），则需要。
         atn_model (torch.nn.Module): ATN 模型（冻结）。
         dataloader (torch.utils.data.DataLoader): 评估数据加载器。
@@ -520,114 +598,297 @@ def evaluate_model(
 
     Returns:
         Dict[str, float]: 包含评估指标名称及其对应值的字典。
-                          例如：{'Feature_L2_Diff_Avg': 0.5, 'Feature_Cosine_Sim_Avg': 0.9, ...}
+                          例如：{'Feature_L2_Diff_Avg': 0.5, 'TriggerNet_ASR': 0.8, 'PSNR_Avg': 25.0, ...}
     """
     # Ensure ATN model is in evaluation mode and on the correct device
     # Note: IrisBabelModel handles its own device placement internally.
-
-    # Initialize evaluation metrics dictionary
-
-    # 如果生成器模型存在且当前是 Stage 1，将生成器设为评估模式
-    # Stage 1 评估需要生成器来产生对抗特征
-    if generator is not None and current_train_stage == 1:
-        generator.eval()
-
-    # 如果判别器模型存在，将判别器设为评估模式
-    if discriminator is not None:
-        discriminator.eval() # 即使 Stage 1 不直接评估判别器，设为评估模式是好习惯
+    # Ensure other models are in eval mode if they exist
+    if generator is not None: generator.eval()
+    if discriminator is not None: discriminator.eval()
 
     print(f"Starting evaluation for Stage {current_train_stage}...")
 
-    # 初始化指标字典和用于累积指标的列表
-    eval_metrics: Dict[str, list] = {}
+    # Initialize evaluation metrics dictionary and lists to accumulate batch results
+    eval_metrics_lists: Dict[str, list] = {}
 
-    # 使用 torch.no_grad() 上下文管理器，确保在评估期间不计算梯度
+    # Use torch.no_grad() context manager, ensure gradients are not computed during evaluation
     with torch.no_grad():
-        # 遍历评估数据加载器
-        # 使用 tqdm 显示评估进度条
+        # Iterate over the evaluation dataloader
         from tqdm import tqdm # Import tqdm here for local use in this function
         for i, batch_data in tqdm(enumerate(dataloader), total=len(dataloader), desc="Evaluating"):
-            real_x = batch_data.to(device) # 原始图像数据 (B, C_img, T, H_img, W_img)
+            # Check if batch is None or empty
+            if batch_data is None or batch_data.size(0) == 0:
+                 print(f"Warning: Skipping empty evaluation batch {i}.")
+                 continue # Skip empty batch
 
-            # Stage 1 评估：关注特征差异
+            # Original image data (B, T, H, W, C) from dataset
+            real_x_original_format = batch_data.to(device) # Shape (B, T, H, W, C)
+
+            # Permute original images to (B, C, T, H, W) if Stage 2 Generator expects this
+            # In Stage 2, Generator takes original images (B, C, T, H, W) and outputs pixel delta (B, C, T, H, W)
+            # ATN models take (B, T, H, W, C) input.
+            # Let's work with both formats as needed.
+            real_x_permuted = real_x_original_format.permute(0, 4, 1, 2, 3) # (B, T, H, W, C) -> (B, C, T, H, W)
+
+            # --- Generate Adversarial Samples (Stage 1 or Stage 2) ---
+            # This depends on the generator and the stage
+            # Stage 1: Generator inputs Features, outputs Feature Delta -> Adversarial Features
+            # Stage 2: Generator inputs Images, outputs Pixel Delta -> Adversarial Images
+
+            adversarial_x = None # Will hold either adversarial features or adversarial images
+            pixel_delta = None # Will hold pixel delta if Stage 2
+            adversarial_features = None # Will hold adversarial features if Stage 1
+            original_features = None # Will hold original features if needed
+
+            if generator is not None: # If a generator is provided
+                 if current_train_stage == 1:
+                      # Stage 1 evaluation needs original features first
+                      original_atn_outputs_for_gen = get_atn_outputs(
+                         atn_model,
+                         real_x_original_format, # ATN takes (B, T, H, W, C)
+                         return_features=True, return_decision=False, return_attention=False
+                      )
+                      original_features = original_atn_outputs_for_gen.get('features') # Expected shape (B, C_feat, N_feat, H_feat, W_feat)
+
+                      if original_features is not None and original_features.numel() > 0:
+                           # Generator takes original features (B, C_feat, N_feat, H_feat, W_feat)
+                           feature_delta = generator(original_features.to(device)) # Feature delta (B, C_feat, N_feat, H_feat, W_feat)
+                           adversarial_features = original_features.to(device) + feature_delta # Adversarial features
+                           # Ensure adversarial features are valid (e.g., within certain bounds if applicable)
+                           # Not typically bounded like pixel values
+                      else:
+                           print(f"Warning: Evaluation batch {i} - Failed to get original features for Stage 1 generator input. Skipping batch for metrics depending on adversarial features.")
+                           # Skip batch if features are missing for Stage 1 gen
+                           continue # Skip to next batch
+
+                 elif current_train_stage == 2:
+                      # Stage 2 evaluation: Generator takes original images, outputs pixel delta
+                      # Generator expects (B, C, T, H, W)
+                      pixel_delta = generator(real_x_permuted) # Pixel delta (B, 3, T, H, W)
+                      # Apply L-inf constraint for evaluation if generator didn't guarantee it
+                      epsilon = getattr(cfg.model.generator, 'epsilon', None)
+                      if epsilon is not None:
+                           pixel_delta = torch.clamp(pixel_delta, -epsilon, epsilon)
+
+                      # Calculate adversarial images: original images + pixel delta
+                      # Ensure original images are in the same format as delta (B, C, T, H, W)
+                      adversarial_x = real_x_permuted + pixel_delta
+                      # Clamp adversarial images to [0, 1] range
+                      adversarial_x = torch.clamp(adversarial_x, 0, 1) # Adversarial images (B, 3, T, H, W)
+
+                      # In Stage 2 eval, we might also need ATN outputs for both original and adversarial images
+                      # ATN models expect (B, T, H, W, C) input format
+                      # Permute adversarial_x back to (B, T, H, W, C) for ATN
+                      adversarial_x_original_format = adversarial_x.permute(0, 2, 3, 4, 1) # (B, 3, T, H, W) -> (B, T, H, W, 3)
+
+                      # Get ATN outputs for original and adversarial images
+                      original_atn_outputs = get_atn_outputs(
+                           atn_model,
+                           real_x_original_format, # Original images (B, T, H, W, C)
+                           return_features=True, return_decision=True, return_attention=True
+                      )
+                      adversarial_atn_outputs = get_atn_outputs(
+                           atn_model,
+                           adversarial_x_original_format, # Adversarial images (B, T, H, W, C)
+                           return_features=True, return_decision=True, return_attention=True
+                      )
+
+                      # Extract outputs needed for Stage 2 metrics
+                      original_trigger_output = original_atn_outputs.get('trigger_output') # TriggerNet output
+                      adversarial_trigger_output = adversarial_atn_outputs.get('trigger_output') # TriggerNet output
+                      # original_attention_map = original_atn_outputs.get('attention') # Attention map (Optional metric)
+                      # adversarial_attention_map = adversarial_atn_outputs.get('attention') # Attention map (Optional metric)
+
+                 else: # Should not happen based on script entry point, but for completeness
+                      print(f"Error: evaluate_model called with unknown training stage {current_train_stage}. Cannot proceed.")
+                      return {} # Return empty dict for error
+            else: # If no generator is provided, evaluate original data or pre-saved adversarial data
+                 print("Warning: No generator provided to evaluate_model. Evaluating original data only, or assuming adversarial data is implicitly handled.")
+                 # If no generator, can only evaluate original ATN outputs and potentially pre-loaded adversarial data
+                 # For this implementation, we assume evaluation requires generated adversarial samples.
+                 # If you need to evaluate pre-saved samples, modify this logic to load them instead.
+                 print("Error: Generator is None, cannot perform evaluation requiring adversarial samples.")
+                 return {} # Return empty dict if generator is missing
+
+            # --- Calculate Metrics based on Training Stage --- #
+            # Metrics to calculate for the current batch
+            batch_metrics: Dict[str, float] = {}
+
             if current_train_stage == 1:
-                # 1. 获取原始特征
-                original_atn_outputs = get_atn_outputs(
-                    atn_model,
-                    real_x, # 输入原始图像
-                    return_features=True, # 需要原始特征
-                    return_decision=False, # Stage 1 评估通常不关注决策/注意力
-                    return_attention=False
-                )
-                original_features = original_atn_outputs.get('features')
+                # Stage 1 Metrics: Feature Difference, GAN evaluation (optional)
+                if original_features is not None and adversarial_features is not None:
+                    # Calculate perceptual metrics on features (using placeholder function)
+                    # stage_1_seq_step = getattr(cfg.evaluation, 'sequence_step_to_vis', 0) # Use config step for feature vis if needed
+                    # feature_perceptual_metrics = calculate_perceptual_metrics(
+                    #     original_features=original_features, # shape (B, C, N, H, W)
+                    #     adversarial_features=adversarial_features, # shape (B, C, N, H, W)
+                    #     device=device,
+                    #     sequence_step_to_vis=stage_1_seq_step # Use config step
+                    # ) # This function is a placeholder and needs to be adjusted for meaningful feature comparison
+                    # batch_metrics.update(feature_perceptual_metrics)
+                    pass # Skipping placeholder feature perceptual metrics for now
 
-                # 检查是否成功获取原始特征
-                if original_features is None or original_features.numel() == 0:
-                    print(f"Warning: Evaluation batch {i} - Failed to get original features from ATN. Skipping batch for feature metrics.")
-                    continue # 如果没有原始特征，跳过当前批次的特征评估
+                # (Optional) Calculate Discriminator scores for Stage 1 features
+                if discriminator is not None and original_features is not None and adversarial_features is not None:
+                     try:
+                         # Discriminator expects (B, C, T, H, W) - need to ensure feature shape matches this
+                         # Assuming ATN features are (B, 128, N, H, W), need to match Discriminator input
+                         # If Discriminator is 3D (for sequences), it should match (B, C, T, H, W) format
+                         # If Discriminator is PatchGAN (3D), it also expects (B, C, T, H, W)
+                         # Let's assume the Discriminator in Stage 1 is designed for features (B, 128, N, H, W)
+                         # If the Discriminator model definition expects a different shape, adjust here.
+                         D_real_output = discriminator(original_features) # Pass original features to D
+                         D_fake_output = discriminator(adversarial_features) # Pass adversarial features to D
+                         batch_metrics['Discriminator_Score_Real_Avg'] = D_real_output.mean().item()
+                         batch_metrics['Discriminator_Score_Fake_Avg'] = D_fake_output.mean().item()
+                     except Exception as e:
+                          print(f"Error calculating Stage 1 discriminator scores: {e}. Skipping.")
+                          # Add NaN placeholders if calculation fails
+                          batch_metrics['Discriminator_Score_Real_Avg'] = float('nan')
+                          batch_metrics['Discriminator_Score_Fake_Avg'] = float('nan')
 
-                # 2. 使用 Generator 生成对抗特征
-                if generator is None:
-                     print("Error: Generator is None, but needed for Stage 1 evaluation. Skipping evaluation.")
-                     return {} # 如果生成器为 None，无法进行 Stage 1 评估
-
-                # Generator takes original features as input in Stage 1
-                # Ensure original_features is on the correct device
-                delta = generator(original_features.to(device)) # 生成特征扰动
-                adversarial_features = original_features.to(device) + delta # 计算对抗特征
-
-                # 3. 计算特征差异相关的指标
-                # 使用 calculate_perceptual_metrics 计算特征差异（L2 范数和余弦相似度）
-                # calculate_perceptual_metrics 期望输入形状 (B, C, H, W) 或 (B, C, N, H, W)
-                # 如果是 5D (B, C, N, H, W)，它会在指定的 sequence_step_to_vis 步骤进行计算
-                # 确保配置中有 evaluation.sequence_step_to_vis
-                seq_step_eval = getattr(cfg.evaluation, 'sequence_step_to_vis', 0) # 默认评估序列步骤 0
-                # calculate_perceptual_metrics 需要 5D 输入
-                perceptual_metrics = calculate_perceptual_metrics(
-                    original_features=original_features, # shape (B, C, N, H, W)
-                    adversarial_features=adversarial_features, # shape (B, C, N, H, W)
-                    device=device,
-                    sequence_step_to_vis=seq_step_eval # 使用配置中指定的评估序列步骤
-                )
-
-                # 4. 收集当前批次的指标
-                for metric_name, metric_value in perceptual_metrics.items():
-                    if metric_name not in eval_metrics:
-                        eval_metrics[metric_name] = []
-                    eval_metrics[metric_name].append(metric_value) # perceptual_metrics 返回的是标量值列表，直接添加
-
-                # （可选）计算判别器得分 (仅用于 Stage 1 评估，观察判别能力)
-                if discriminator is not None:
-                     D_real_output = discriminator(original_features)
-                     D_fake_output = discriminator(adversarial_features)
-                     if 'Discriminator_Score_Real_Avg' not in eval_metrics:
-                          eval_metrics['Discriminator_Score_Real_Avg'] = []
-                          eval_metrics['Discriminator_Score_Fake_Avg'] = []
-                     eval_metrics['Discriminator_Score_Real_Avg'].append(D_real_output.mean().item())
-                     eval_metrics['Discriminator_Score_Fake_Avg'].append(D_fake_output.mean().item())
-
-
-            # TODO: Stage 2 评估逻辑 (计算决策成功率，注意力攻击效果等)
             elif current_train_stage == 2:
-                 print("Stage 2 evaluation not fully implemented yet.")
-                 pass # Add Stage 2 evaluation logic here
+                # Stage 2 Metrics: Attack Success Rate (TriggerNet), TriggerNet Output Diff, Perceptual Metrics (Images)
+                # Ensure original and adversarial TriggerNet outputs are available and valid
+                if original_trigger_output is not None and adversarial_trigger_output is not None:
+                    # 1. TriggerNet Output Difference Metrics
+                    try:
+                        # MSE Difference (already calculated in training, but recalculate here for eval consistency)
+                        # Flatten outputs for MSE calculation per sample if they are spatial/temporal maps
+                        orig_trigger_flat = original_trigger_output.view(original_trigger_output.shape[0], -1)
+                        adv_trigger_flat = adversarial_trigger_output.view(adversarial_trigger_output.shape[0], -1)
+                        # Calculate MSE per sample
+                        trigger_mse_diff_per_sample = torch.mean((adv_trigger_flat - orig_trigger_flat)**2, dim=1) # Shape (B,)
+                        batch_metrics['TriggerNet_MSE_Diff_Avg'] = float(torch.mean(trigger_mse_diff_per_sample).item()) # Average over batch
+
+                        # Cosine Similarity
+                        cosine_sim_per_sample = F.cosine_similarity(orig_trigger_flat, adv_trigger_flat, dim=1) # Shape (B,)
+                        batch_metrics['TriggerNet_Cosine_Sim_Avg'] = float(torch.mean(cosine_sim_per_sample).item()) # Average over batch
+
+                    except Exception as e:
+                         print(f"Error calculating TriggerNet output difference metrics: {e}. Skipping.")
+                         batch_metrics['TriggerNet_MSE_Diff_Avg'] = float('nan')
+                         batch_metrics['TriggerNet_Cosine_Sim_Avg'] = float('nan')
+
+                    # 2. Attack Success Rate (ASR) for TriggerNet
+                    try:
+                        # Get success criterion and threshold from config for Stage 2 TriggerNet attack
+                        trigger_success_criterion = getattr(cfg.evaluation, 'success_criterion', 'mse_diff_threshold')
+                        trigger_success_threshold = getattr(cfg.evaluation, 'success_threshold', 0.1)
+                        # Calculate ASR using the dedicated function
+                        # Ensure inputs to calculate_attack_success_rate are compatible with its expected dimensions
+                        # calculate_attack_success_rate expects (B, ...) and will flatten internally if needed.
+                        batch_asr = calculate_attack_success_rate(
+                            original_trigger_output,
+                            adversarial_trigger_output,
+                            success_threshold=trigger_success_threshold,
+                            success_criterion=trigger_success_criterion,
+                            # Add other relevant parameters if needed by the criterion (e.g., topk_k)
+                            topk_k=getattr(cfg.losses, 'topk_k', 10) # Pass topk_k from config if needed
+                        )
+                        batch_metrics['TriggerNet_ASR'] = float(batch_asr) # ASR is already a scalar float
+
+                    except Exception as e:
+                         print(f"Error calculating TriggerNet ASR: {e}. Skipping.")
+                         batch_metrics['TriggerNet_ASR'] = float('nan')
+                elif original_trigger_output is None or adversarial_trigger_output is None:
+                     print(f"Warning: Original or adversarial TriggerNet output is None for batch {i}. Cannot calculate Stage 2 TriggerNet metrics.")
+                     # Add NaN placeholders if TriggerNet outputs are missing
+                     batch_metrics['TriggerNet_MSE_Diff_Avg'] = float('nan')
+                     batch_metrics['TriggerNet_Cosine_Sim_Avg'] = float('nan')
+                     batch_metrics['TriggerNet_ASR'] = float('nan')
 
 
-    # 计算所有批次的平均指标
+                # 3. Perceptual Metrics (on Images)
+                # Ensure original and adversarial images are available and valid (B, 3, T, H, W)
+                if real_x_permuted is not None and adversarial_x is not None and real_x_permuted.shape == adversarial_x.shape:
+                    # Select a sequence step for 2D perceptual metrics if input is 5D
+                    # Use the step specified in config for evaluation visualization/metrics
+                    perceptual_eval_step = getattr(cfg.evaluation, 'sequence_step_to_vis', 0)
+
+                    # Extract the specified sequence step for perceptual metrics (B, 3, H, W)
+                    if real_x_permuted.ndim == 5:
+                         if perceptual_eval_step < real_x_permuted.shape[2]:
+                              original_image_step = real_x_permuted[:, :, perceptual_eval_step, :, :]
+                              adversarial_image_step = adversarial_x[:, :, perceptual_eval_step, :, :]
+                         else:
+                              print(f"Warning: Perceptual evaluation step {perceptual_eval_step} out of bounds for image sequence length {real_x_permuted.shape[2]} in batch {i}. Skipping image perceptual metrics.")
+                              # Add NaN placeholders if step is out of bounds
+                              batch_metrics['psnr'] = float('nan')
+                              batch_metrics['lpips'] = float('nan')
+                              batch_metrics['ssim'] = float('nan')
+                              original_image_step = None # Set to None to skip calculation
+                              adversarial_image_step = None # Set to None to skip calculation
+
+                    elif real_x_permuted.ndim == 4: # If input is already 4D (no sequence dim)
+                         original_image_step = real_x_permuted
+                         adversarial_image_step = adversarial_x
+
+                    else: # Neither 4D nor 5D
+                         print(f"Warning: Image tensors are not 4D or 5D ({real_x_permuted.ndim}D) for perceptual metrics in batch {i}. Skipping.")
+                         # Add NaN placeholders if dimensions are wrong
+                         batch_metrics['psnr'] = float('nan')
+                         batch_metrics['lpips'] = float('nan')
+                         batch_metrics['ssim'] = float('nan')
+                         original_image_step = None # Set to None to skip calculation
+                         adversarial_image_step = None # Set to None to skip calculation
+
+                    # Calculate image perceptual metrics if valid image steps were extracted
+                    if original_image_step is not None and adversarial_image_step is not None:
+                         # Ensure images are 3 channels for SSIM/LPIPS if needed
+                         if original_image_step.shape[1] == 3:
+                              image_perceptual_metrics = calculate_image_perceptual_metrics(
+                                   original_images=original_image_step, # (B, 3, H, W)
+                                   adversarial_images=adversarial_image_step, # (B, 3, H, W)
+                                   device=device
+                              )
+                              batch_metrics.update(image_perceptual_metrics) # Add psnr, lpips, ssim
+                         else:
+                              print(f"Warning: Image tensors for perceptual metrics are not 3 channels ({original_image_step.shape[1]}). Skipping SSIM/LPIPS.")
+                              # Calculate PSNR even if not 3 channels, but skip SSIM/LPIPS
+                              try:
+                                  psnr_vals = calculate_psnr(original_image_step, adversarial_image_step, data_range=1.0)
+                                  batch_metrics['psnr'] = float(np.nanmean(psnr_vals.cpu().numpy())) if psnr_vals.numel() > 0 else float('nan')
+                              except Exception as e:
+                                  print(f"Error calculating PSNR for non-3-channel images: {e}. Skipping.")
+                                  batch_metrics['psnr'] = float('nan')
+                              batch_metrics['lpips'] = float('nan') # Explicitly NaN
+                              batch_metrics['ssim'] = float('nan') # Explicitly NaN
+
+
+                else:
+                     print(f"Warning: Original or adversarial image tensors are None or shape mismatch for perceptual metrics in batch {i}. Skipping.")
+                     # Add NaN placeholders if image tensors are missing
+                     batch_metrics['psnr'] = float('nan')
+                     batch_metrics['lpips'] = float('nan')
+                     batch_metrics['ssim'] = float('nan')
+
+
+            # Collect batch metrics into the lists
+            for metric_name, metric_value in batch_metrics.items():
+                if metric_name not in eval_metrics_lists:
+                    eval_metrics_lists[metric_name] = []
+                # Only append finite values to avoid skewing the average with NaNs/Infs
+                if np.isfinite(metric_value):
+                     eval_metrics_lists[metric_name].append(metric_value)
+                # print(f"Debug: Batch {i} - {metric_name}: {metric_value}") # Debug print for batch metrics
+
+    # Calculate average metrics across all batches
     average_metrics: Dict[str, float] = {}
-    if eval_metrics:
+    if eval_metrics_lists:
         print("Calculating average evaluation metrics...")
-        for metric_name, metric_values in eval_metrics.items():
-            if metric_values: # 确保列表不为空
-                 average_metrics[metric_name] = float(np.mean(metric_values)) # 计算平均值并转换为 float
+        for metric_name, metric_values in eval_metrics_lists.items():
+            if metric_values: # Ensure list is not empty after filtering NaNs/Infs
+                 average_metrics[metric_name] = float(np.mean(metric_values)) # Calculate mean of finite values
             else:
-                 average_metrics[metric_name] = float('nan') # 如果列表为空，记为 NaN
+                 average_metrics[metric_name] = float('nan') # If list becomes empty, average is NaN
+            # print(f"Debug: Average {metric_name}: {average_metrics[metric_name]}") # Debug print for average metrics
 
     print("Evaluation finished.")
-    # 恢复模型到训练模式 (如果它们本来是训练模式)
-    if generator is not None and current_train_stage == 1:
-        generator.train() 
-    if discriminator is not None:
-        discriminator.train() 
+    # Restore models to training mode (if they were training)
+    if generator is not None and current_train_stage in [1, 2]: # Stage 2 also trains generator
+        generator.train()
+    if discriminator is not None: # Discriminator train in both stages if used
+        discriminator.train()
 
-    return average_metrics # 返回平均指标字典
+    return average_metrics # Return the dictionary of average metrics

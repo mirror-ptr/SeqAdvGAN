@@ -12,6 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 from typing import Optional # 导入 Optional
 from typing import List # 导入 List
 import traceback
+from typing import Any # 导入 Any
 
 # 导入正则化损失中的范数计算函数
 # 假设 regularization_losses.py 在 losses 文件夹下
@@ -420,163 +421,473 @@ def visualize_stage2_pixel_attack(writer: SummaryWriter,
                                     original_trigger_output: Optional[torch.Tensor], # TriggerNet output
                                     adversarial_trigger_output: Optional[torch.Tensor], # TriggerNet output
                                     step: int,
+                                    cfg: Any, # Add cfg parameter to access config
                                     num_samples: int = 4,
-                                    sequence_step_to_vis: int = 0):
+                                    sequence_steps_to_vis: Optional[List[int]] = None): # Still accept list for flexibility or future use
     """
     可视化 Stage 2 像素级攻击训练过程的关键元素：
     原始图像、对抗图像、像素扰动，以及原始和对抗样本的 TriggerNet 输出。
+    根据配置中的 visualize_mode (logging.visualize_mode)，选择使用 add_video 或 make_grid 进行可视化。
 
     Args:
         writer (SummaryWriter): TensorBoard 的 SummaryWriter 对象。
-        original_images (torch.Tensor): 原始输入图像批次 (B, C, T, H, W)。
-        adversarial_images (torch.Tensor): 添加扰动后的对抗图像批次 (B, C, T, H, W)。
-        pixel_deltas (torch.Tensor): 生成的像素级扰动批次 (B, C, T, H, W)。
+        original_images (torch.Tensor): 原始输入图像批次 (B, C, H, W) 或 (B, C, T, H, W)。
+        adversarial_images (torch.Tensor): 添加扰动后的对抗图像批次 (B, C, H, W) 或 (B, C, T, H, W)。
+        pixel_deltas (torch.Tensor): 生成的像素级扰动批次 (B, C, H, W) 或 (B, C, T, H, W)。
         original_trigger_output (Optional[torch.Tensor]): 原始样本通过 ATN 后的 TriggerNet 输出。
         adversarial_trigger_output (Optional[torch.Tensor]): 对抗样本通过 ATN 后的 TriggerNet 输出。
         step (int): 当前的训练全局步数。
-        num_samples (int): 要可视化的样本数量。
-        sequence_step_to_vis (int): 要可视化的序列步骤索引。
+        cfg (Any): 配置对象，用于读取 visualize_mode 等配置。
+        num_samples (int): 要可视化的样本数量。对于视频可视化，这是要可视化的视频数量。
+        sequence_steps_to_vis (Optional[List[int]], optional): (仅用于 image_grid 模式) 用于指定要可视化的序列步骤列表。当输入为 4D 时，此参数被忽略。如果为 None，对于 5D 输入，在 image_grid 模式下默认可视化第一个步骤 (0)。
     """
-    # Ensure tensors are 5D (B, C, T, H, W) and on CPU
-    if original_images.ndim != 5 or adversarial_images.ndim != 5 or pixel_deltas.ndim != 5:
-        print(f"Warning: Input images or deltas are not 5D. Cannot visualize stage 2 pixel attack.")
-        return
-        
+    # Ensure tensors are 4D (B, C, H, W) or 5D (B, C, T, H, W)
+
+    # Get visualization mode from config
+    visualize_mode = getattr(cfg.logging, 'visualize_mode', 'video') # Default to video if not specified
+
     # Determine batch size and number of samples to show
     batch_size = original_images.shape[0]
     num_samples_to_show = min(num_samples, batch_size)
-    
-    # Determine sequence length and the step to visualize
-    seq_len = original_images.shape[2]
-    vis_step = min(sequence_step_to_vis, seq_len - 1)
-    vis_step = max(0, vis_step)
 
-    # Select the specified sequence step and move to CPU/detach
-    original_images_step = original_images[:num_samples_to_show, :, vis_step, :, :].cpu().detach()
-    adversarial_images_step = adversarial_images[:num_samples_to_show, :, vis_step, :, :].cpu().detach()
-    pixel_deltas_step = pixel_deltas[:num_samples_to_show, :, vis_step, :, :].cpu().detach()
+    # Check if input is 5D (has sequence dimension)
+    is_5d_input = original_images.ndim == 5
 
-    # --- Visualize Images and Deltas ---
-    # Assuming images are 3-channel (RGB)
-    if original_images_step.shape[1] == 3 and adversarial_images_step.shape[1] == 3 and pixel_deltas_step.shape[1] == 3:
-        # Original Images
-        grid_orig_img = make_grid(original_images_step, nrow=num_samples_to_show, normalize=True)
-        writer.add_image(f'Stage2_Visualization/Epoch_Step_{step}/Original_Images_Seq{vis_step}', grid_orig_img, step)
+    if visualize_mode == "video" and is_5d_input:
+        # --- Video Visualization Mode (for 5D input) ---
+        # Input original/adversarial images are (B, T, H, W, C)
+        # Input pixel deltas are (B, C, T, H, W)
+        # add_video expects (N, T, C, H, W)
 
-        # Adversarial Images
-        grid_adv_img = make_grid(adversarial_images_step, nrow=num_samples_to_show, normalize=True)
-        writer.add_image(f'Stage2_Visualization/Epoch_Step_{step}/Adversarial_Images_Seq{vis_step}', grid_adv_img, step)
+        # Slice batch for all inputs
+        original_videos = original_images[:num_samples_to_show].cpu().detach()
+        adversarial_videos = adversarial_images[:num_samples_to_show].cpu().detach()
+        pixel_delta_videos = pixel_deltas[:num_samples_to_show].cpu().detach()
 
-        # Pixel Deltas (Normalize to visualize the perturbation intensity, potentially scaled)
-        # We can normalize based on the epsilon value or min/max in the batch
-        # Let's normalize based on the batch's min/max for now
-        min_delta = pixel_deltas_step.min()
-        max_delta = pixel_deltas_step.max()
+        # Ensure images are 3 channels (RGB) for video visualization and permute to (N, T, C, H, W)
+        # Original/Adversarial images are (B, T, H, W, C), need to permute to (N, T, C, H, W)
+        if original_videos.shape[4] != 3:
+             print(f"Warning: Original input videos are not 3 channels ({original_videos.shape[4]}). Skipping video visualization.")
+             return
+        # Permute (N, T, H, W, C) to (N, T, C, H, W)
+        original_videos_for_vis = original_videos.permute(0, 1, 4, 2, 3)
+        adversarial_videos_for_vis = adversarial_videos.permute(0, 1, 4, 2, 3)
+
+        # Pixel deltas are (B, C, T, H, W), need to permute to (N, T, C, H, W)
+        if pixel_delta_videos.shape[1] != 3:
+             print(f"Warning: Pixel delta videos are not 3 channels ({pixel_delta_videos.shape[1]}). Skipping video visualization.")
+             return
+        # Permute (N, C, T, H, W) to (N, T, C, H, W)
+        pixel_delta_videos_for_vis = pixel_delta_videos.permute(0, 2, 1, 3, 4)
+
+
+        # Ensure there are videos to show after slicing and permutation
+        if original_videos_for_vis.shape[0] == 0 or original_videos_for_vis.shape[1] == 0:
+            print(f"Warning: No complete video sequences to show after slicing batch ({original_videos_for_vis.shape[0]} samples, {original_videos_for_vis.shape[1]} frames). Skipping video visualization.")
+            return
+
+        # --- Visualize Videos ---
+        # Original Images Video
+        writer.add_video(f'Stage2_Visualization/Videos/Original_Images', original_videos_for_vis, step, fps=getattr(cfg.logging, 'video_fps', 4))
+
+        # Adversarial Images Video
+        writer.add_video(f'Stage2_Visualization/Videos/Adversarial_Images', adversarial_videos_for_vis, step, fps=getattr(cfg.logging, 'video_fps', 4))
+
+        # Pixel Deltas Video (Normalize for visualization)
+        # Normalize based on the batch's min/max over the whole video
+        min_delta = pixel_delta_videos_for_vis.min() if pixel_delta_videos_for_vis.numel() > 0 else 0.0
+        max_delta = pixel_delta_videos_for_vis.max() if pixel_delta_videos_for_vis.numel() > 0 else 1.0
         if max_delta > min_delta + 1e-8:
-            normalized_deltas = (pixel_deltas_step - min_delta) / (max_delta - min_delta + 1e-8)
+             normalized_delta_videos = (pixel_delta_videos_for_vis - min_delta) / (max_delta - min_delta + 1e-8)
         else:
-            normalized_deltas = torch.zeros_like(pixel_deltas_step, device=pixel_deltas_step.device)
+             normalized_delta_videos = torch.zeros_like(pixel_delta_videos_for_vis, device=pixel_delta_videos_for_vis.device)
 
-        grid_deltas = make_grid(normalized_deltas, nrow=num_samples_to_show, normalize=False) # Already normalized
-        writer.add_image(f'Stage2_Visualization/Epoch_Step_{step}/Pixel_Deltas_Seq{vis_step}', grid_deltas, step)
-    else:
-        print(f"Warning: Images or deltas are not 3 channels. Skipping image/delta visualization in visualize_stage2_pixel_attack.")
+        # add_video expects values in [0, 255] uint8 or [0, 1] float. Normalizing to [0, 1].
+        writer.add_video(f'Stage2_Visualization/Videos/Pixel_Deltas', normalized_delta_videos, step, fps=getattr(cfg.logging, 'video_fps', 4))
 
-    # --- Visualize TriggerNet Outputs (If available) ---
-    # Assuming TriggerNet output is a spatial map (e.g., B, H', W') or (B, num_classes)
-    # If it's a spatial map, we can visualize it as a heatmap.
-    # If it's a class score, maybe plot or log the scores/differences.
+        # --- Visualize TriggerNet Outputs Video (If available and 5D) ---
+        # Assume TriggerNet output is 5D (B, C_out, N, H', W') for video visualization
+        # Need to check TriggerNet output shape and potentially permute to (N, T, C_out, H', W')
+        if original_trigger_output is not None and adversarial_trigger_output is not None and original_trigger_output.ndim == 5 and adversarial_trigger_output.ndim == 5:
+             if original_trigger_output.shape[0] >= num_samples_to_show and original_trigger_output.shape[2] > 0:
+                  # Slice batch
+                  original_trigger_output_vis_sliced = original_trigger_output[:num_samples_to_show].cpu().detach() # (N, C_out, T, H', W')
+                  adversarial_trigger_output_vis_sliced = adversarial_trigger_output[:num_samples_to_show].cpu().detach() # (N, C_out, T, H', W')
 
-    # Need to know the shape and meaning of TriggerNet output to visualize it effectively.
-    # Based on the get_atn_outputs implementation and test.py, it might be (B, H', W', 8) - spatial output with 8 channels?
-    # Or it might be reduced to (B, 8) or (B, 1) or similar depending on the final layer.
-    # Let's assume for now it's a spatial map (B, ?, H', W') and visualize the first channel or mean/norm.
+                  # Permute to (N, T, C_out, H', W') for add_video
+                  original_trigger_videos = original_trigger_output_vis_sliced.permute(0, 2, 1, 3, 4)
+                  adversarial_trigger_videos = adversarial_trigger_output_vis_sliced.permute(0, 2, 1, 3, 4)
 
-    def _process_trigger_output_for_vis(trigger_output: Optional[torch.Tensor], name: str) -> Optional[torch.Tensor]:
-        if trigger_output is None or trigger_output.numel() == 0:
-            # print(f"Warning: TriggerNet output '{name}' is None or empty. Skipping visualization.") # Avoid excessive prints
-            return None
+                  # Process channels for visualization (ensure 1 or 3 channels)
+                  def _process_trigger_output_channels_for_video(trigger_videos: torch.Tensor) -> Optional[torch.Tensor]:
+                       # Input is (N, T, C_out, H', W')
+                       N_vid, T_vid, C_out_vid, H_vid, W_vid = trigger_videos.shape
+                       if C_out_vid == 1:
+                            return trigger_videos # Already 1 channel
+                       elif C_out_vid >= 3:
+                             return trigger_videos[:, :, :3, :, :] # Take first 3 channels
+                       elif C_out_vid > 0: # Take mean across channels
+                            # Ensure mean is over channel dim (index 2)
+                            return torch.mean(trigger_videos, dim=2, keepdim=True).repeat(1, 1, 3, 1, 1) # Mean over C_out dim, then repeat to 3 channels
+                       else:
+                            print("Warning: TriggerNet output has 0 channels. Cannot visualize.")
+                            return None
 
-        processed_output = None
-        try:
-            # Assuming TriggerNet output might be (B, ..., H', W'). Need to get it to (B, 1, H', W') or (B, 3, H', W').
-            if trigger_output.ndim == 4: # e.g., (B, C_out, H', W') or (B, N, H', W')
-                 # If C_out or N is 1, use it directly. If > 1, take mean or first channel.
-                 if trigger_output.shape[1] == 1:
-                      processed_output = trigger_output
-                 elif trigger_output.shape[1] >= 3: # Take first 3 channels
-                      processed_output = trigger_output[:, :3, :, :]
-                 else: # Take mean across channels
-                      processed_output = torch.mean(trigger_output, dim=1, keepdim=True)
-            elif trigger_output.ndim == 5: # e.g., (B, C_out, N, H', W') - take specified sequence step
-                 seq_len_out = trigger_output.shape[2]
-                 vis_step_out = min(sequence_step_to_vis, seq_len_out - 1)
-                 vis_step_out = max(0, vis_step_out)
-                 trigger_output_step = trigger_output[:, :, vis_step_out, :, :].squeeze(2) # (B, C_out, H', W')
+                  processed_orig_trigger_videos = _process_trigger_output_channels_for_video(original_trigger_videos)
+                  processed_adv_trigger_videos = _process_trigger_output_channels_for_video(adversarial_trigger_videos)
 
-                 if trigger_output_step.shape[1] == 1:
-                      processed_output = trigger_output_step
-                 elif trigger_output_step.shape[1] >= 3: # Take first 3 channels
-                      processed_output = trigger_output_step[:, :3, :, :]
-                 else: # Take mean across channels
-                      processed_output = torch.mean(trigger_output_step, dim=1, keepdim=True)
+                  if processed_orig_trigger_videos is not None and processed_orig_trigger_videos.shape[2] in [1, 3]: # Check processed channels
+                       # Normalize for visualization ([0, 1] range)
+                       min_val = processed_orig_trigger_videos.min() if processed_orig_trigger_videos.numel() > 0 else 0.0
+                       max_val = processed_orig_trigger_videos.max() if processed_orig_trigger_videos.numel() > 0 else 1.0
+                       if max_val > min_val + 1e-8:
+                            normalized_orig_trigger = (processed_orig_trigger_videos - min_val) / (max_val - min_val + 1e-8)
+                       else:
+                            normalized_orig_trigger = torch.zeros_like(processed_orig_trigger_videos, device=processed_orig_trigger_videos.device)
 
-            elif trigger_output.ndim == 3: # e.g., (B, H', W') - add channel dim
-                 processed_output = trigger_output.unsqueeze(1) # (B, 1, H', W')
+                       writer.add_video(f'Stage2_Visualization/Videos/Original_TriggerNet_Output', normalized_orig_trigger, step, fps=getattr(cfg.logging, 'video_fps', 4))
 
-            # Handle case where output is not spatial, e.g., (B, num_classes)
-            # For now, if not spatial, skip visualization as make_grid is for images.
-            if processed_output is not None and processed_output.ndim == 4 and processed_output.shape[2] > 1 and processed_output.shape[3] > 1: # Check if it looks like an image batch
-                 # Normalize the output for visualization
-                 normalized_batch = []
-                 for img in processed_output[:num_samples_to_show]:
-                      min_val = img.min()
-                      max_val = img.max()
-                      if max_val > min_val + 1e-8:
-                           normalized_img = (img - min_val) / (max_val - min_val + 1e-8)
-                      else:
-                           normalized_img = torch.zeros_like(img, device=img.device)
-                      normalized_batch.append(normalized_img)
-                 return torch.stack(normalized_batch, dim=0).float()
-            else:
-                 # print(f"Warning: TriggerNet output '{name}' is not in a suitable spatial format for image visualization (ndim={trigger_output.ndim}, shape={trigger_output.shape}).") # Avoid excessive prints
-                 return None
+                  if processed_adv_trigger_videos is not None and processed_orig_trigger_videos is not None and processed_adv_trigger_videos.shape == processed_orig_trigger_videos.shape and processed_adv_trigger_videos.shape[2] in [1, 3]: # Check processed channels
+                       # Normalize for visualization ([0, 1] range)
+                       min_val = processed_adv_trigger_videos.min() if processed_adv_trigger_videos.numel() > 0 else 0.0
+                       max_val = processed_adv_trigger_videos.max() if processed_adv_trigger_videos.numel() > 0 else 1.0
+                       if max_val > min_val + 1e-8:
+                            normalized_adv_trigger = (processed_adv_trigger_videos - min_val) / (max_val - min_val + 1e-8)
+                       else:
+                            normalized_adv_trigger = torch.zeros_like(processed_adv_trigger_videos, device=processed_adv_trigger_videos.device)
 
-        except Exception as e:
-            print(f"Error processing TriggerNet output '{name}' for visualization: {e}")
-            traceback.print_exc()
-            return None
+                       writer.add_video(f'Stage2_Visualization/Videos/Adversarial_TriggerNet_Output', normalized_adv_trigger, step, fps=getattr(cfg.logging, 'video_fps', 4))
 
-    processed_orig_trigger_output = _process_trigger_output_for_vis(original_trigger_output, "Original TriggerNet Output")
-    processed_adv_trigger_output = _process_trigger_output_for_vis(adversarial_trigger_output, "Adversarial TriggerNet Output")
+                       # TriggerNet Output Difference Video
+                       if processed_orig_trigger_videos.device != processed_adv_trigger_videos.device:
+                            # print("Warning: Original and adversarial TriggerNet output videos are on different devices. Moving adversarial to original device.")
+                            processed_adv_trigger_videos = processed_adv_trigger_videos.to(processed_orig_trigger_videos.device)
 
-    if processed_orig_trigger_output is not None:
-        grid_orig_trigger = make_grid(processed_orig_trigger_output, nrow=num_samples_to_show, normalize=False)
-        writer.add_image(f'Stage2_Visualization/Epoch_Step_{step}/Original_TriggerNet_Output_Seq{vis_step}', grid_orig_trigger, step)
+                       trigger_output_diff_videos = torch.abs(processed_adv_trigger_videos - processed_orig_trigger_videos)
+                       if trigger_output_diff_videos.numel() > 0:
+                            min_diff = trigger_output_diff_videos.min() if trigger_output_diff_videos.numel() > 0 else 0.0
+                            max_diff = trigger_output_diff_videos.max() if trigger_output_diff_videos.numel() > 0 else 1.0
+                            if max_diff > min_diff + 1e-8:
+                                 normalized_diff_videos = (trigger_output_diff_videos - min_diff) / (max_diff - min_diff + 1e-8)
+                            else:
+                                 normalized_diff_videos = torch.zeros_like(trigger_output_diff_videos, device=trigger_output_diff_videos.device)
 
-    if processed_adv_trigger_output is not None and processed_adv_trigger_output.shape == processed_orig_trigger_output.shape:
-        grid_adv_trigger = make_grid(processed_adv_trigger_output, nrow=num_samples_to_show, normalize=False)
-        writer.add_image(f'Stage2_Visualization/Epoch_Step_{step}/Adversarial_TriggerNet_Output_Seq{vis_step}', grid_adv_trigger, step)
-
-        # Visualize the difference between original and adversarial TriggerNet outputs
-        trigger_output_diff = torch.abs(processed_adv_trigger_output - processed_orig_trigger_output)
-        if trigger_output_diff.numel() > 0:
-             min_diff = trigger_output_diff.min()
-             max_diff = trigger_output_diff.max()
-             if max_diff > min_diff + 1e-8:
-                  normalized_diff = (trigger_output_diff - min_diff) / (max_diff - min_diff + 1e-8)
+                            # Ensure difference video is 1 or 3 channels before adding
+                            if normalized_diff_videos.shape[2] in [1, 3]:
+                                 writer.add_video(f'Stage2_Visualization/Videos/TriggerNet_Output_Difference', normalized_diff_videos, step, fps=getattr(cfg.logging, 'video_fps', 4))
+                            else:
+                                 print(f"Warning: TriggerNet output difference video is not 1 or 3 channels ({normalized_diff_videos.shape[2]}). Skipping visualization.")
+                       else:
+                            print("Warning: TriggerNet output difference videos are empty. Skipping visualization.")
+                  elif processed_adv_trigger_videos is not None: # If original is None but adversarial is not
+                       print("Warning: Original TriggerNet output videos are None but adversarial are not. Cannot visualize.")
+                  elif processed_orig_trigger_videos is not None and processed_adv_trigger_videos is None: # If adversarial is None but original is not
+                       print("Warning: Adversarial TriggerNet output videos are None but original are not. Cannot visualize.")
              else:
-                  normalized_diff = torch.zeros_like(trigger_output_diff, device=trigger_output_diff.device)
+                 print(f"Warning: TriggerNet output batch size ({original_trigger_output.shape[0]}) is less than num_samples_to_show ({num_samples_to_show}) or sequence length ({original_trigger_output.shape[2]}) is 0. Skipping TriggerNet output video visualization.")
+        elif original_trigger_output is not None or adversarial_trigger_output is not None: # If either exists but is not 5D
+             print(f"Warning: TriggerNet output is not 5D ({original_trigger_output.ndim if original_trigger_output is not None else adversarial_trigger_output.ndim}D). Skipping TriggerNet output video visualization.")
 
-             grid_trigger_diff = make_grid(normalized_diff, nrow=num_samples_to_show, normalize=False)
-             writer.add_image(f'Stage2_Visualization/Epoch_Step_{step}/TriggerNet_Output_Difference_Seq{vis_step}', grid_trigger_diff, step)
+    elif visualize_mode == "image_grid":
+        # --- Image Grid Visualization Mode ---
+        # Input original/adversarial images are (B, T, H, W, C) or (B, C, H, W)
+        # Input pixel deltas are (B, C, T, H, W) or (B, C, H, W)
+        # make_grid expects (N, C, H, W) - where N is total images in grid
+
+        # Determine which sequence steps to visualize for image grid (use sequence_steps_to_vis parameter)
+        # If input is 5D (B, T, H, W, C), sequence length is T (index 1)
+        # If input is 4D (B, C, H, W), sequence length is 1
+        seq_len = original_images.shape[1] if original_images.ndim == 5 else 1 # Sequence length is 1 for 4D input (B, C, H, W) where T=1
+        # Let's refine seq_len check based on shape (B, T, H, W, C)
+        seq_len_images = original_images.shape[1] if original_images.ndim == 5 else 1 # T is at index 1 for (B, T, H, W, C)
+        seq_len_deltas = pixel_deltas.shape[2] if pixel_deltas.ndim == 5 else 1 # T is at index 2 for (B, C, T, H, W)
+
+        if original_images.ndim == 5: # If input is 5D (B, T, H, W, C)
+             valid_seq_len = seq_len_images
+        elif original_images.ndim == 4: # If input is 4D (B, C, H, W)
+             valid_seq_len = 1
         else:
-             print(f"Warning: TriggerNet output difference map is empty. Skipping difference visualization.")
-    elif processed_adv_trigger_output is not None:
-         print(f"Warning: Adversarial TriggerNet output shape {processed_adv_trigger_output.shape} does not match original shape {processed_orig_trigger_output.shape}. Skipping adversarial TriggerNet output and difference visualization.")
+             valid_seq_len = 0 # Not 4D or 5D, no valid sequence length
+             print(f"Warning: Input images for image grid are not 4D or 5D ({original_images.ndim}D). Skipping image grid visualization.")
+             return
+
+
+        if sequence_steps_to_vis is None or not isinstance(sequence_steps_to_vis, list) or not sequence_steps_to_vis:
+             # If no list is provided, default to visualizing the first step (0)
+             steps_to_visualize = [0]
+        else:
+             # Filter out invalid steps and sort the valid ones based on images sequence length
+             steps_to_visualize = sorted([s for s in sequence_steps_to_vis if 0 <= s < valid_seq_len])
+
+        if not steps_to_visualize:
+             print(f"Warning: No valid sequence steps provided for image grid visualization (available steps 0-{valid_seq_len-1}). Skipping visualization.")
+             return # Skip visualization if no valid steps
+
+        original_images_vis_list = []
+        adversarial_images_vis_list = []
+        pixel_deltas_vis_list = []
+
+        # Extract and collect the specified sequence steps for visualization
+        for vis_step in steps_to_visualize:
+             # Handle both 4D (B, C, H, W) and 5D (B, T, H, W, C) inputs when extracting step
+             if original_images.ndim == 5: # Input (B, T, H, W, C), extract step from T (index 1)
+                  original_images_step = original_images[:num_samples_to_show, vis_step, :, :, :].cpu().detach() # (B_vis, H, W, C)
+                  # Adversarial images also (B, T, H, W, C)
+                  adversarial_images_step = adversarial_images[:num_samples_to_show, vis_step, :, :, :].cpu().detach() # (B_vis, H, W, C)
+                  # Pixel deltas are (B, C, T, H, W), need to extract step from T (index 2)
+                  # Ensure the step is also valid for delta sequence length
+                  if vis_step < seq_len_deltas:
+                       pixel_deltas_step = pixel_deltas[:num_samples_to_show, :, vis_step, :, :].cpu().detach() # (B_vis, C, H, W)
+                  else:
+                       print(f"Warning: Pixel delta step {vis_step} out of bounds for delta sequence length {seq_len_deltas}. Skipping this delta step visualization.")
+                       pixel_deltas_step = None # Set to None to skip this delta step
+
+             elif original_images.ndim == 4 and vis_step == 0: # For 4D (B, C, H, W), only step 0 is valid
+                  # Original/Adversarial images are (B, C, H, W)
+                  original_images_step = original_images[:num_samples_to_show, :, :, :].cpu().detach() # (B_vis, C, H, W)
+                  adversarial_images_step = adversarial_images[:num_samples_to_show, :, :, :].cpu().detach() # (B_vis, C, H, W)
+                  # Pixel deltas are also (B, C, H, W)
+                  pixel_deltas_step = pixel_deltas[:num_samples_to_show, :, :, :].cpu().detach() # (B_vis, C, H, W)
+
+             else:
+                  # Should not happen if invalid steps are filtered, but as safeguard
+                  print(f"Error: Unexpected input dimension ({original_images.ndim}D) or invalid step ({vis_step}) for image grid visualization.")
+                  continue # Skip this step
+
+             # Ensure the extracted tensors are valid and 3/C channels
+             # For 5D input -> (B_vis, H, W, C), check C at index 3
+             # For 4D input -> (B_vis, C, H, W), check C at index 1
+             img_channels_idx = 3 if original_images.ndim == 5 else 1 # Determine channel index based on original input dim
+             delta_channels_idx = 1 # Delta is always (B, C, T, H, W) or (B, C, H, W), channel is at index 1 after slicing
+
+             if original_images_step is not None and adversarial_images_step is not None and original_images_step.shape[img_channels_idx] in [1, 3] and adversarial_images_step.shape[img_channels_idx] in [1, 3]:
+                   # Permute (B_vis, H, W, C) to (B_vis, C, H, W) if needed (for 5D input original format)
+                   if original_images.ndim == 5:
+                         original_images_step_permuted = original_images_step.permute(0, 3, 1, 2) # (B_vis, H, W, C) -> (B_vis, C, H, W)
+                         adversarial_images_step_permuted = adversarial_images_step.permute(0, 3, 1, 2) # (B_vis, H, W, C) -> (B_vis, C, H, W)
+                   else: # 4D input is already (B_vis, C, H, W)
+                        original_images_step_permuted = original_images_step
+                        adversarial_images_step_permuted = adversarial_images_step
+
+                   original_images_vis_list.append(original_images_step_permuted) # Append (B_vis, C, H, W)
+                   adversarial_images_vis_list.append(adversarial_images_step_permuted) # Append (B_vis, C, H, W)
+             else:
+                  # Update warning to be more specific about the channel index being checked
+                  orig_channels = original_images_step.shape[img_channels_idx] if original_images_step is not None and original_images_step.ndim > img_channels_idx else 'N/A'
+                  adv_channels = adversarial_images_step.shape[img_channels_idx] if adversarial_images_step is not None and adversarial_images_step.ndim > img_channels_idx else 'N/A'
+                  print(f"Warning: Original or adversarial image step is None or channel count ({orig_channels}/{adv_channels}) at index {img_channels_idx} is not 1 or 3 for step {vis_step}. Skipping.")
+
+             if pixel_deltas_step is not None and pixel_deltas_step.shape[delta_channels_idx] in [1, 3]:
+                  # Delta is already (B, C, H, W) for 5D input after slicing T, or is (B, C, H, W) for 4D input
+                  pixel_deltas_vis_list.append(pixel_deltas_step) # Append (B_vis, C, H, W)
+             elif pixel_deltas_step is not None:
+                  delta_channels = pixel_deltas_step.shape[delta_channels_idx] if pixel_deltas_step.ndim > delta_channels_idx else 'N/A'
+                  print(f"Warning: Pixel delta step is not 1 or 3 channels ({delta_channels}) at index {delta_channels_idx} for step {vis_step}. Skipping.")
+
+        # Concatenate the list of tensors along the batch dimension for make_grid
+        # Only proceed if there are images to show
+        if original_images_vis_list:
+            original_images_grid_input = torch.cat(original_images_vis_list, dim=0) # Shape (num_samples_to_show * num_steps_to_vis, C, H, W)
+            adversarial_images_grid_input = torch.cat(adversarial_images_vis_list, dim=0)
+            # Only concatenate deltas if there are valid delta steps
+            if pixel_deltas_vis_list:
+                 pixel_deltas_grid_input = torch.cat(pixel_deltas_vis_list, dim=0)
+            else:
+                 pixel_deltas_grid_input = None # No deltas to show in grid
+
+            num_images_in_grid = original_images_grid_input.shape[0] # Total number of images in the grid
+            vis_steps_for_log = steps_to_visualize # Use the list for log naming
+        else:
+             print("Warning: No images collected for image grid visualization. Skipping.")
+             return
+
+        # Ensure there are images in the grid
+        if num_images_in_grid == 0:
+             print("Warning: No images to show in the grid. Skipping visualization.")
+             return
+
+        # --- Visualize Images and Deltas (Image Grid) ---
+        # Assuming images are 3-channel (RGB) or 1-channel (grayscale). Check channel dimension (index 1).
+        if original_images_grid_input.shape[1] in [1, 3]:
+             # Original Images Grid
+             grid_orig_img = make_grid(original_images_grid_input, nrow=len(steps_to_visualize), normalize=True)
+             writer.add_image(f'Stage2_Visualization/Image_Grids/Original_Images_Steps_{vis_steps_for_log}', grid_orig_img, step)
+
+             # Adversarial Images Grid
+             grid_adv_img = make_grid(adversarial_images_grid_input, nrow=len(steps_to_visualize), normalize=True)
+             writer.add_image(f'Stage2_Visualization/Image_Grids/Adversarial_Images_Steps_{vis_steps_for_log}', grid_adv_img, step)
+
+             # Pixel Deltas Grid (Normalize for visualization)
+             if pixel_deltas_grid_input is not None and pixel_deltas_grid_input.shape[1] in [1, 3]: # Check if deltas are available and 1/3 channels
+                 min_delta = pixel_deltas_grid_input.min() if pixel_deltas_grid_input.numel() > 0 else 0.0
+                 max_delta = pixel_deltas_grid_input.max() if pixel_deltas_grid_input.numel() > 0 else 1.0
+                 if max_delta > min_delta + 1e-8:
+                      normalized_deltas_grid = (pixel_deltas_grid_input - min_delta) / (max_delta - min_delta + 1e-8)
+                 else:
+                      normalized_deltas_grid = torch.zeros_like(pixel_deltas_grid_input, device=pixel_deltas_grid_input.device)
+
+                 grid_deltas = make_grid(normalized_deltas_grid, nrow=len(steps_to_visualize), normalize=False)
+                 writer.add_image(f'Stage2_Visualization/Image_Grids/Pixel_Deltas_Steps_{vis_steps_for_log}', grid_deltas, step)
+             elif pixel_deltas_grid_input is not None:
+                  print(f"Warning: Pixel deltas grid is not 1 or 3 channels ({pixel_deltas_grid_input.shape[1]}). Skipping delta grid visualization.")
+             # If pixel_deltas_grid_input is None, the warning was already printed when collecting steps
+
+        else:
+             print(f"Warning: Images or deltas are not 1 or 3 channels. Skipping image grid visualization.")
+
+        # --- Visualize TriggerNet Outputs Grid (If available) ---
+        # Assume TriggerNet output is a spatial map (B, C_out, N, H', W') or (B, C_out, H', W') or (B, H', W')
+        # Process and concatenate TriggerNet outputs for selected steps
+        processed_orig_trigger_list = []
+        processed_adv_trigger_list = []
+
+        if original_trigger_output is not None and adversarial_trigger_output is not None:
+             # Determine TriggerNet output sequence length
+             trigger_seq_len = original_trigger_output.shape[2] if original_trigger_output.ndim == 5 else 1 # N is at index 2 for (B, C, N, H, W)
+             # Let's refine trigger_seq_len based on shape
+             if original_trigger_output.ndim == 5: # (B, C_out, N, H', W')
+                  trigger_valid_seq_len = original_trigger_output.shape[2]
+             elif original_trigger_output.ndim in [3, 4]: # (B, H', W') or (B, C_out, H', W'), sequence length is 1
+                  trigger_valid_seq_len = 1
+             else:
+                  trigger_valid_seq_len = 0 # Not supported shape
+                  print(f"Warning: TriggerNet output for image grid is not 3D, 4D, or 5D ({original_trigger_output.ndim}D). Skipping TriggerNet output grid visualization.")
+
+             # Determine which sequence steps to visualize for TriggerNet (use the same steps as images if valid)
+             steps_to_visualize_trigger = sorted([s for s in steps_to_visualize if s < trigger_valid_seq_len])
+
+             if not steps_to_visualize_trigger:
+                  if trigger_valid_seq_len > 0: # Only print if TriggerNet output had a valid sequence length but no steps were in common
+                       print(f"Warning: No valid sequence steps provided for TriggerNet output image grid visualization (available steps 0-{trigger_valid_seq_len-1}). Skipping.")
+                  # If no valid steps for trigger, but valid steps for images were found, log this warning and continue
+             else:
+                 for vis_step_trigger in steps_to_visualize_trigger:
+                      # Handle extracting step from 4D, 5D, or 3D TriggerNet output
+                      if original_trigger_output.ndim == 5: # (B, C_out, N, H', W'), extract N at index 2
+                           # Extract step (B, C_out, H', W')
+                           orig_trigger_step = original_trigger_output[:num_samples_to_show, :, vis_step_trigger, :, :].cpu().detach()
+                           adv_trigger_step = adversarial_trigger_output[:num_samples_to_show, :, vis_step_trigger, :, :].cpu().detach()
+                      elif original_trigger_output.ndim == 4 and vis_step_trigger == 0: # For 4D (B, C_out, H', W'), only step 0
+                           # Use directly (B, C_out, H', W')
+                           orig_trigger_step = original_trigger_output[:num_samples_to_show, :, :, :].cpu().detach()
+                           adv_trigger_step = adversarial_trigger_output[:num_samples_to_show, :, :, :].cpu().detach()
+                      elif original_trigger_output.ndim == 3 and vis_step_trigger == 0: # For 3D (B, H', W'), only step 0
+                           # Add channel dim (B, 1, H', W')
+                           orig_trigger_step = original_trigger_output[:num_samples_to_show, :, :].unsqueeze(1).cpu().detach()
+                           adv_trigger_step = adversarial_trigger_output[:num_samples_to_show, :, :].unsqueeze(1).cpu().detach()
+                      else: # Should not happen if steps are filtered
+                           print(f"Error: Unexpected TriggerNet output dimension ({original_trigger_output.ndim}D) or invalid step ({vis_step_trigger}) for image grid visualization.")
+                           continue # Skip this step
+
+                      # Process channels (ensure 1 or 3 channels for make_grid)
+                      def _process_channels_for_grid(trigger_output_step_4d: torch.Tensor) -> Optional[torch.Tensor]:
+                           # Input is (B_vis, C_out, H', W')
+                           if trigger_output_step_4d.shape[1] == 1:
+                                return trigger_output_step_4d
+                           elif trigger_output_step_4d.shape[1] >= 3: # Take first 3 channels
+                                return trigger_output_step_4d[:, :3, :, :]
+                           elif trigger_output_step_4d.shape[1] > 0: # Take mean across channels, then repeat to 3
+                                return torch.mean(trigger_output_step_4d, dim=1, keepdim=True).repeat(1, 3, 1, 1)
+                           else:
+                                print("Warning: Processed TriggerNet step has 0 channels. Cannot visualize.")
+                                return None
+
+                      processed_orig_step = _process_channels_for_grid(orig_trigger_step)
+                      processed_adv_step = _process_channels_for_grid(adv_trigger_step)
+
+                      if processed_orig_step is not None and processed_adv_step is not None and processed_orig_step.shape == processed_adv_step.shape and processed_orig_step.shape[1] in [1, 3]: # Check processed channels
+                           processed_orig_trigger_list.append(processed_orig_step) # Append processed step (B_vis, C', H', W')
+                           processed_adv_trigger_list.append(processed_adv_step) # Append processed step (B_vis, C', H', W')
+                      elif processed_orig_step is not None or processed_adv_step is not None: # If one is None or shapes/channels mismatch
+                           print(f"Warning: Original or adversarial TriggerNet step outputs for step {vis_step_trigger} have issues (None, shape mismatch, or wrong channels). Skipping this step.")
+
+             # Concatenate the list of processed tensors along the batch dimension
+             if processed_orig_trigger_list:
+                  processed_orig_trigger_grid_input = torch.cat(processed_orig_trigger_list, dim=0) # Shape (num_samples_to_show * num_valid_steps, C', H', W')
+                  processed_adv_trigger_grid_input = torch.cat(processed_adv_trigger_list, dim=0)
+                  num_trigger_images_in_grid = processed_orig_trigger_grid_input.shape[0]
+             else:
+                  print("Warning: No TriggerNet output images collected for image grid visualization. Skipping.")
+                  num_trigger_images_in_grid = 0
+
+             # Ensure there are images in the trigger grid
+             if num_trigger_images_in_grid > 0:
+                  # Normalize the combined batch of outputs for visualization ([0, 1] range)
+                  normalized_orig_trigger_list = []
+                  normalized_adv_trigger_list = []
+
+                  for img in processed_orig_trigger_grid_input:
+                       min_val = img.min() if img.numel() > 0 else 0.0
+                       max_val = img.max() if img.numel() > 0 else 1.0
+                       if max_val > min_val + 1e-8:
+                            normalized_img = (img - min_val) / (max_val - min_val + 1e-8)
+                       else:
+                            normalized_img = torch.zeros_like(img, device=img.device)
+                       normalized_orig_trigger_list.append(normalized_img)
+
+                  for img in processed_adv_trigger_grid_input:
+                       min_val = img.min() if img.numel() > 0 else 0.0
+                       max_val = img.max() if img.numel() > 0 else 1.0
+                       if max_val > min_val + 1e-8:
+                            normalized_img = (img - min_val) / (max_val - min_val + 1e-8)
+                       else:
+                            normalized_img = torch.zeros_like(img, device=img.device)
+                       normalized_adv_trigger_list.append(normalized_img)
+
+                  # Stack normalized images
+                  normalized_orig_trigger_grid = torch.stack(normalized_orig_trigger_list, dim=0).float()
+                  normalized_adv_trigger_grid = torch.stack(normalized_adv_trigger_list, dim=0).float()
+
+                  # Ensure tensors are on CPU before make_grid
+                  normalized_orig_trigger_grid = normalized_orig_trigger_grid.cpu()
+                  normalized_adv_trigger_grid = normalized_adv_trigger_grid.cpu()
+
+                  # Visualize Original TriggerNet Output Grid
+                  grid_orig_trigger = make_grid(normalized_orig_trigger_grid, nrow=len(steps_to_visualize_trigger), normalize=False)
+                  writer.add_image(f'Stage2_Visualization/Image_Grids/Original_TriggerNet_Output_Steps_{steps_to_visualize_trigger}', grid_orig_trigger, step)
+
+                  # Visualize Adversarial TriggerNet Output Grid
+                  grid_adv_trigger = make_grid(normalized_adv_trigger_grid, nrow=len(steps_to_visualize_trigger), normalize=False)
+                  writer.add_image(f'Stage2_Visualization/Image_Grids/Adversarial_TriggerNet_Output_Steps_{steps_to_visualize_trigger}', grid_adv_trigger, step)
+
+                  # Visualize TriggerNet Output Difference Grid
+                  # Ensure both tensors are on the same device before calculating difference
+                  if normalized_orig_trigger_grid.device != normalized_adv_trigger_grid.device:
+                       # print("Warning: Original and adversarial TriggerNet output grids are on different devices for difference calculation. Attempting to move adversarial to original device.")
+                       normalized_adv_trigger_grid = normalized_adv_trigger_grid.to(normalized_orig_trigger_grid.device)
+
+                  trigger_output_diff_grid = torch.abs(normalized_adv_trigger_grid - normalized_orig_trigger_grid)
+                  if trigger_output_diff_grid.numel() > 0:
+                       min_diff = trigger_output_diff_grid.min() if trigger_output_diff_grid.numel() > 0 else 0.0
+                       max_diff = trigger_output_diff_grid.max() if trigger_output_diff_grid.numel() > 0 else 1.0
+                       if max_diff > min_diff + 1e-8:
+                            normalized_diff_grid = (trigger_output_diff_grid - min_diff) / (max_diff - min_diff + 1e-8)
+                       else:
+                            normalized_diff_grid = torch.zeros_like(trigger_output_diff_grid, device=trigger_output_diff_grid.device)
+
+                       # Ensure difference grid is 1 or 3 channels before adding
+                       if normalized_diff_grid.shape[1] in [1, 3]:
+                            grid_trigger_diff = make_grid(normalized_diff_grid.cpu(), nrow=len(steps_to_visualize_trigger), normalize=False)
+                            writer.add_image(f'Stage2_Visualization/Image_Grids/TriggerNet_Output_Difference_Steps_{steps_to_visualize_trigger}', grid_trigger_diff, step)
+                       else:
+                            print(f"Warning: TriggerNet output difference grid is not 1 or 3 channels ({normalized_diff_grid.shape[1]}). Skipping visualization.")
+                  else:
+                       print("Warning: TriggerNet output difference grid map is empty. Skipping visualization.")
+             elif original_trigger_output is not None or adversarial_trigger_output is not None: # If one is None or processed lists are empty
+                  print("Warning: Original or adversarial TriggerNet output is not None, but processed lists are empty after filtering/processing. Skipping image grid visualization.")
+        elif original_trigger_output is not None or adversarial_trigger_output is not None: # If either exists but is not supported shape (3D, 4D, 5D)
+             print(f"Warning: TriggerNet output is not None, but is not 3D, 4D, or 5D ({original_trigger_output.ndim if original_trigger_output is not None else adversarial_trigger_output.ndim}D) for image grid visualization. Skipping.")
+
+    # If visualize_mode is neither "video" nor "image_grid", print a warning
+    # Also print warning if video mode requested for non-5D input
+    elif visualize_mode == "video" and not is_5d_input:
+         print(f"Warning: Video visualization requested but input is not 5D ({original_images.ndim}D). Input must be 5D for video visualization.")
+    elif visualize_mode not in ["video", "image_grid"]:
+        print(f"Warning: Unsupported visualize_mode '{visualize_mode}' specified in config. Skipping visualization.")
+
 
 # 示例用法 (在训练或评估脚本中): # 添加注释以说明示例用途
-# from utils.vis_utils import visualize_training_losses, visualize_perturbation_norms, visualize_samples_and_outputs, visualize_attention_maps
+# from utils.vis_utils import visualize_training_losses, visualize_perturbation_norms, visualize_samples_and_outputs, visualize_attention_maps, visualize_stage2_pixel_attack
 # from torch.utils.tensorboard import SummaryWriter
 # import os
 #
@@ -588,57 +899,34 @@ def visualize_stage2_pixel_attack(writer: SummaryWriter,
 #
 # # 在训练循环中:
 # # ... (模型前向传播，计算损失) ...
-# # 假设你有一个包含各种损失的字典 loss_dict
-# # loss_dict = {'Generator_Total': g_loss, 'Discriminator_Total': d_loss, 'Generator_GAN': g_gan_loss, ...}
-#
-# # 每隔 N 步记录损失和扰动范数
-# current_step = ... # 当前全局训练步数
-# if current_step % log_interval == 0:
-#      visualize_training_losses(writer, loss_dict, current_step)
-#      # 假设 delta 是 generator 输出的扰动
-#      visualize_perturbation_norms(writer, delta, current_step)
+# # 假设你有原始图像 (B, C, T, H, W) 和对应的对抗样本、扰动、以及 ATN 输出
+# # original_image, adversarial_image, pixel_delta, original_trigger_output, adversarial_trigger_output
 #
 # # 每隔 M 步或每个 epoch 结束时可视化样本和输出
+# current_step = ... # 当前全局训练步数
+# vis_interval = ... # 可视化间隔
+# num_vis_samples = ... # 可视化样本数量
+#
 # if current_step % vis_interval == 0 or current_step == total_steps:
-#      # 假设你有原始图像、ATN 输出 (特征、决策、注意力) 和对抗样本/输出
-#      # original_image: 原始图像输入 (B, C_img, T, H_img, W_img)
-#      # original_atn_outputs = get_atn_outputs(atn_model, original_image, ...)
-#      # original_features = original_atn_outputs.get('features')
-#      # original_decision_map = original_atn_outputs.get('decision')
-#      # original_attention_matrix = original_atn_outputs.get('attention')
+#      # 从配置中读取可视化模式和要可视化的时间步列表
+#      visualize_mode = cfg.logging.get('visualize_mode', 'video') # Default to video
+#      sequence_steps_to_vis = cfg.logging.get('sequence_steps_to_vis', None)
 #
-#      # # 生成对抗样本/扰动并获取对抗输出
-#      # delta = generator(original_input or original_features) # 根据阶段不同
-#      # adversarial_input or adversarial_features = original_input/features + delta
-#      # adversarial_atn_outputs = get_atn_outputs(atn_model, adversarial_input or adversarial_features, ...)
-#      # adversarial_features = adversarial_atn_outputs.get('features')
-#      # adversarial_decision_map = adversarial_atn_outputs.get('decision')
-#      # adversarial_attention_matrix = adversarial_atn_outputs.get('attention')
-#
-#      visualize_samples_and_outputs(
-#          writer,
-#          original_image=original_image, # 原始图像 (如果 Stage 2 使用)
-#          original_features=original_features, # 原始 ATN 特征
-#          feature_delta=delta, # 阶段 1 的特征扰动
-#          adversarial_features=adversarial_features, # 对抗 ATN 特征
-#          original_decision_map=original_decision_map, # 原始决策图 (如果 Stage 2 使用)
-#          adversarial_decision_map=adversarial_decision_map, # 对抗决策图 (如果 Stage 2 使用)
+#      visualize_stage2_pixel_attack(
+#          writer=writer,
+#          original_images=original_image, # 原始图像 (B, C, T, H, W) 或 (B, C, H, W)
+#          adversarial_images=adversarial_image, # 对抗图像 (B, C, T, H, W) 或 (B, C, H, W)
+#          pixel_deltas=pixel_delta, # 像素扰动 (B, C, T, H, W) 或 (B, C, H, W)
+#          original_trigger_output=original_trigger_output, # 原始 TriggerNet 输出
+#          adversarial_trigger_output=adversarial_trigger_output, # 对抗 TriggerNet 输出
 #          step=current_step,
-#          num_samples=4, # 从 config 中获取
-#          sequence_step_to_vis=0, # 从 config 中获取
-#          visualize_decision_diff=True # 从 config 中获取 (Stage 2 usually True)
+#          cfg=cfg, # Pass the config object
+#          num_samples=num_vis_samples, # Number of samples/videos to visualize
+#          sequence_steps_to_vis=sequence_steps_to_vis # Pass the list of steps for image_grid mode
 #      )
 #
-#      # 可视化注意力图 (通常在 Stage 2 更相关)
-#      if original_attention_matrix is not None and adversarial_attention_matrix is not None:
-#           visualize_attention_maps(
-#               writer,
-#               attention_matrix_orig=original_attention_matrix,
-#               attention_matrix_adv=adversarial_attention_matrix,
-#               step=current_step,
-#               num_samples=2, # 从 config 中获取
-#               num_heads_to_vis=2 # 从 config 中获取
-#           )
+#      # 其他可视化，如损失、扰动范数等，按原间隔记录
+#      # ... (visualize_training_losses, visualize_perturbation_norms) ...
 #
 # # 训练结束时关闭 writer
 # writer.close()

@@ -75,7 +75,6 @@ training:
   discriminator_weights_path: null
   resume_checkpoint: null
   
-  eval_interval: 1
   save_interval: 1
   dynamic_gan_balance:
     enabled: true
@@ -117,7 +116,7 @@ mask:
 # 添加 evaluation 配置
 evaluation:
   num_eval_samples: 32 # 评估时使用的样本数量/批次大小
-  eval_interval: 50 # 每隔多少个 epoch 进行一次评估
+  eval_interval: 5 # 每隔多少个 epoch 进行一次评估
   success_threshold: 0.1 # 攻击成功阈值 (根据 TriggerNet 输出和攻击目标调整)
   success_criterion: "mse_diff_threshold" # 攻击成功判定标准 (根据 TriggerNet 输出和攻击目标调整)
   # 添加针对 AttentionTransformer 输出的评估指标和标准
@@ -128,7 +127,8 @@ evaluation:
 logging:
   log_dir: "runs/stage2_train" # 或者保留 default_train
   log_interval: 10 # 每隔 10 步记录一次损失
-  vis_interval: 100 # 每隔 100 步可视化一次样本 (可以减小间隔以便调试)
+  vis_interval: 10 # 每隔 100 步可视化一次样本 (可以减小间隔以便调试)
   num_vis_samples: 4
   sequence_step_to_vis: 0
   num_vis_heads: 1 # 添加可视化注意力头数量的配置
+  visualize_mode: "image_grid" # Add visualization mode: "video" or "image_grid"
