@@ -300,7 +300,7 @@ def train(cfg: Any) -> None:
         )
         eval_dataloader = DataLoader(
             eval_dataset,
-            batch_size=getattr(cfg.evaluation, 'num_eval_samples', cfg.training.batch_size),
+            batch_size=cfg.training.batch_size,
             shuffle=False,
             num_workers=0,
             worker_init_fn=worker_init_fn,
@@ -565,7 +565,7 @@ def train(cfg: Any) -> None:
 
                         if (global_step + 1) % dynamic_balance_cfg.freq_adjust_interval == 0:
                              # ... (频率调整逻辑) ...
-                             avg_d_loss = np.mean(list(d_loss_history)) if d_loss_history else 0.0 # Ensure np is imported
+                             avg_d_loss = np.mean(list(d_loss_history)) if d_loss_history else 0.0
                              avg_g_gan_loss = np.mean(list(g_gan_loss_history)) if g_gan_loss_history else 0.0
 
                              balance_ratio = float('inf')
@@ -711,6 +711,33 @@ def train(cfg: Any) -> None:
 
             global_step += 1
 
+        # --- Save latest checkpoint after each epoch train loop ---
+        checkpoint_dir = os.path.join(cfg.logging.log_dir, 'checkpoints')
+        # print(f"Debug: Attempting to create latest checkpoint directory: {checkpoint_dir}") # Debug log
+        try:
+            os.makedirs(checkpoint_dir, exist_ok=True) # Create checkpoint directory if it doesn't exist
+            # print(f"Debug: Latest checkpoint directory {checkpoint_dir} created or already exists.") # Debug log
+        except Exception as e:
+           print(f"Error: Failed to create latest checkpoint directory {checkpoint_dir}: {e}") # Explicit error for dir creation
+
+        latest_checkpoint_path = os.path.join(checkpoint_dir, f'latest_stage_{cfg.training.train_stage}.pth')
+        # print(f"Debug: Attempting to save latest model to {latest_checkpoint_path}") # Debug log
+        try: # Potential failure point: file writing failure
+            torch.save({
+                'epoch': epoch,
+                'global_step': global_step, # Save the global step after the epoch
+                'generator_state_dict': generator.state_dict(),
+                'discriminator_state_dict': discriminator.state_dict() if discriminator is not None else None,
+                'optimizer_G_state_dict': optimizer_G.state_dict(),
+                'optimizer_D_state_dict': optimizer_D.state_dict() if optimizer_D is not None else None,
+                'best_eval_metric': best_eval_metric, # Save the current best metric even in latest
+                'cfg': cfg
+            }, latest_checkpoint_path)
+            print(f"Latest model successfully saved to {latest_checkpoint_path}")
+        except Exception as e: # Catch and print errors during saving
+             print(f"Error: Failed to save latest checkpoint to {latest_checkpoint_path}: {e}") # Explicit error for latest checkpoint save
+
+
         # --- 评估 ---
         # 根据配置的间隔或在最后一个 epoch 进行评估
         if (epoch + 1) % cfg.training.get('eval_interval', 10) == 0 or (epoch + 1) == cfg.training.num_epochs:
@@ -743,7 +770,7 @@ def train(cfg: Any) -> None:
                     # Save best model checkpoint (based on primary evaluation metric)
                     primary_eval_metric_name = getattr(cfg.evaluation, 'primary_metric', 'TriggerNet_ASR') # Get primary metric name from config, default to ASR for Stage 2
                     is_lower_metric_better = getattr(cfg.evaluation, 'primary_metric_lower_is_better', False) # Get whether lower is better, default to False (higher is better for ASR)
-                    primary_eval_metric = eval_metrics.get(primary_eval_metric_name) # Get the value of the primary metric
+                    primary_eval_metric = eval_metrics.get(primary_eval_metric_name)
 
                     # Only compare and save if the primary metric value is valid
                     if primary_eval_metric is not None and np.isfinite(primary_eval_metric):
@@ -781,11 +808,11 @@ def train(cfg: Any) -> None:
                                     'epoch': epoch,
                                     'global_step': global_step,
                                     'generator_state_dict': generator.state_dict(),
-                                    'discriminator_state_dict': discriminator.state_dict() if discriminator is not None else None, # Handle discriminator being None
+                                    'discriminator_state_dict': discriminator.state_dict() if discriminator is not None else None,
                                     'optimizer_G_state_dict': optimizer_G.state_dict(),
-                                    'optimizer_D_state_dict': optimizer_D.state_dict() if optimizer_D is not None else None, # Handle optimizer_D being None
+                                    'optimizer_D_state_dict': optimizer_D.state_dict() if optimizer_D is not None else None,
                                     'best_eval_metric': best_eval_metric,
-                                    'cfg': cfg # Save config for reproducibility
+                                    'cfg': cfg
                                 }, best_checkpoint_path)
                                 print(f"Best model successfully saved to {best_checkpoint_path}")
                             except Exception as e: # Catch and print errors during saving
@@ -794,32 +821,6 @@ def train(cfg: Any) -> None:
                             print(f"Current evaluation metric ('{primary_eval_metric_name}') {primary_eval_metric:.4f} is not better than best {best_eval_metric:.4f}.")
                     else:
                          print(f"Warning: Primary evaluation metric '{primary_eval_metric_name}' value is invalid ({primary_eval_metric}). Skipping best checkpoint saving.")
-
-                    # Always save the latest checkpoint (regardless of performance)
-                    checkpoint_dir = os.path.join(cfg.logging.log_dir, 'checkpoints')
-                    # print(f"Debug: Attempting to create latest checkpoint directory: {checkpoint_dir}") # Debug log
-                    try:
-                        os.makedirs(checkpoint_dir, exist_ok=True)
-                        # print(f"Debug: Latest checkpoint directory {checkpoint_dir} created or already exists.") # Debug log
-                    except Exception as e:
-                       print(f"Error: Failed to create latest checkpoint directory {checkpoint_dir}: {e}") # Explicit error for dir creation
-
-                    latest_checkpoint_path = os.path.join(checkpoint_dir, f'latest_stage_{cfg.training.train_stage}.pth')
-                    # print(f"Debug: Attempting to save latest model to {latest_checkpoint_path}") # Debug log
-                    try: # Potential failure point: file writing failure
-                        torch.save({
-                            'epoch': epoch,
-                            'global_step': global_step,
-                            'generator_state_dict': generator.state_dict(),
-                            'discriminator_state_dict': discriminator.state_dict() if discriminator is not None else None, # Handle discriminator being None
-                            'optimizer_G_state_dict': optimizer_G.state_dict(),
-                            'optimizer_D_state_dict': optimizer_D.state_dict() if optimizer_D is not None else None, # Handle optimizer_D being None
-                            'best_eval_metric': best_eval_metric, # Save the current best metric even in latest
-                            'cfg': cfg
-                        }, latest_checkpoint_path)
-                        print(f"Latest model successfully saved to {latest_checkpoint_path}")
-                    except Exception as e: # Catch and print errors during saving
-                         print(f"Error: Failed to save latest checkpoint to {latest_checkpoint_path}: {e}") # Explicit error for latest checkpoint save
 
                 # After evaluation, set models back to training mode (if training hasn't finished)
                 if (epoch + 1) < cfg.training.num_epochs:
